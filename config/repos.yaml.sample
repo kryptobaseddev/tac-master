@@ -41,6 +41,16 @@ defaults:
   # Per user policy, this is allowed for assigned repos and for tac-master's own repo.
   auto_merge: true
 
+  # Runtime mode for ADW execution:
+  #   native  → fast subprocess on the host LXC (default, shared toolchain)
+  #   podman  → per-run rootless container from `container_image`, fully
+  #             isolated filesystem + clean slate + per-repo Dockerfile support
+  # Native is sufficient for homogeneous repo fleets. Use podman when repos
+  # need different Node/Python/Ruby/etc. versions or when you want each run
+  # in a disposable sandbox. See deploy/README.md §11.
+  runtime: native
+  container_image: tac-worker:latest
+
 # ----------------------------------------------------------------------------
 # Allowlisted repositories
 # ----------------------------------------------------------------------------
@@ -63,6 +73,13 @@ repos:
     # Optional: per-repo environment overrides passed to Claude
     env:
       PROJECT_NOTE: "This repo requires all tests to pass before PR."
+
+  # Example: a repo with non-standard runtime that needs a container.
+  # Requires `sudo bash scripts/tac-update.sh install-podman` first.
+  # - url: https://github.com/OWNER/legacy-ruby-app
+  #   default_workflow: plan_build_test
+  #   runtime: podman
+  #   container_image: tac-worker:latest    # or a per-repo image you build
 
   # Example: a read-only / plan-only repo (orchestrator plans but does not push)
   # - url: https://github.com/OWNER/sensitive-project

@@ -29,6 +29,7 @@ from .config import RepoConfig, TacMasterConfig
 from .github_client import GitHubClient, Issue
 from .knowledge import KnowledgeBase
 from .repo_manager import RepoHandle, RepoManager
+from .runner import RunSpec, make_runner
 from .state_store import StateStore
 from .token_tracker import TokenTracker
 
@@ -191,33 +192,43 @@ class Dispatcher:
         except Exception as e:
             log.warning("Knowledge injection failed (non-fatal): %s", e)
 
-        # Launch the Lead process. We cd into the clone (not the worktree),
-        # because tac-7's ADW scripts expect to run from <project_root>/adws/
-        # and will find the pre-created worktree via state validation.
-        script_path = handle.clone_path / "adws" / script
-        cmd = [
-            "uv", "run", str(script_path), str(issue.number), adw_id,
-        ]
         env = self._build_env(repo, handle)
-
-        log.info("Dispatching %s for %s#%d (adw_id=%s) via %s",
-                 workflow, repo.url, issue.number, adw_id, script)
-
-        # Spawn detached; the daemon loops on; the Lead runs independently.
-        # stdout/stderr → per-run log file.
         log_file = self.cfg.logs_dir / f"run_{adw_id}.log"
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        log_fh = log_file.open("ab")
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(handle.clone_path),
-            env=env,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
 
-        self.store.update_run(adw_id, pid=proc.pid)
+        log.info("Dispatching %s for %s#%d (adw_id=%s) via %s [runtime=%s]",
+                 workflow, repo.url, issue.number, adw_id, script, repo.runtime)
+
+        # Build the run spec and hand off to the appropriate runner.
+        # Native: subprocess.Popen inside the clone.
+        # Podman: rootless container with worktree + substrate bind-mounted.
+        spec = RunSpec(
+            adw_id=adw_id,
+            repo_url=repo.url,
+            issue_number=issue.number,
+            workflow=script,
+            clone_path=handle.clone_path,
+            worktree_path=wt_path,
+            env=env,
+            log_file=log_file,
+            substrate_home=self.cfg.home,
+            container_image=repo.container_image,
+        )
+        runner = make_runner(repo.runtime, default_image=repo.container_image)
+        try:
+            pid = runner.spawn(spec)
+        except Exception as e:
+            log.exception("Runner failed for %s#%d: %s", repo.url, issue.number, e)
+            self.store.update_run(adw_id, status="failed", ended_at=_now())
+            self.store.record_event(
+                "error",
+                json.dumps({"stage": "runner.spawn", "adw_id": adw_id,
+                            "runtime": repo.runtime, "err": str(e)}),
+                repo_url=repo.url,
+                adw_id=adw_id,
+            )
+            return False
+
+        self.store.update_run(adw_id, pid=pid)
         self.store.set_issue_status(repo.url, issue.number, "dispatched")
         self.store.record_event(
             "dispatch",
@@ -226,7 +237,8 @@ class Dispatcher:
                 "issue": issue.number,
                 "workflow": workflow,
                 "adw_id": adw_id,
-                "pid": proc.pid,
+                "runtime": repo.runtime,
+                "pid": pid,
                 "log": str(log_file),
             }),
             repo_url=repo.url,

@@ -161,6 +161,44 @@ def cmd_doctor(cfg: TacMasterConfig) -> int:
     else:
         print(f"  playwright: ⚠ no cache at {pw_cache} (review phase will fail)")
 
+    # Podman is only required if a repo opted into it
+    podman_repos = [r for r in cfg.repos.repos if r.runtime == "podman"]
+    if podman_repos:
+        print(f"  runtime: {len(podman_repos)} repo(s) use podman — verifying...")
+        podman_bin = _sh.which("podman")
+        if not podman_bin:
+            print(f"  podman: ✗ NOT FOUND but required by: "
+                  f"{', '.join(r.slug for r in podman_repos)}")
+            problems += 1
+        else:
+            try:
+                r = _sp.run([podman_bin, "--version"], capture_output=True,
+                            text=True, timeout=10)
+                print(f"  podman: ✓ {r.stdout.strip()}")
+                # Check that each distinct image is available
+                seen_images = set()
+                for repo in podman_repos:
+                    img = repo.container_image
+                    if img in seen_images:
+                        continue
+                    seen_images.add(img)
+                    probe = _sp.run(
+                        [podman_bin, "image", "exists", img],
+                        capture_output=True,
+                    )
+                    if probe.returncode == 0:
+                        print(f"  image {img}: ✓")
+                    else:
+                        print(f"  image {img}: ✗ not built — run "
+                              f"'bash deploy/docker/build.sh' or "
+                              f"'sudo bash scripts/tac-update.sh install-podman'")
+                        problems += 1
+            except Exception as e:
+                print(f"  podman: ✗ {e}")
+                problems += 1
+    else:
+        print("  runtime: all repos use native (podman not required)")
+
     # Check state store + knowledge base schema
     try:
         store = StateStore(cfg.sqlite_path)

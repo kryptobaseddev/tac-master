@@ -230,7 +230,127 @@ tied to a Google/email account, you have to:
 For a long-running autonomous agent on a server, **stick with the API
 key** unless you have a strong reason to use a subscription.
 
-## 10. Security notes
+## 10. Ongoing updates
+
+A single script manages the entire dependency stack:
+
+```bash
+sudo bash /srv/tac-master/scripts/tac-update.sh check           # report versions
+sudo bash /srv/tac-master/scripts/tac-update.sh update          # update + restart
+sudo bash /srv/tac-master/scripts/tac-update.sh update --dry-run
+sudo bash /srv/tac-master/scripts/tac-update.sh update --system-only
+sudo bash /srv/tac-master/scripts/tac-update.sh update --no-restart
+```
+
+`update` touches: apt, Node.js, Claude Code CLI, uv, Bun, Podman (if
+installed), Playwright Chromium, GitHub CLI, tac-master itself (`git
+pull`), and the dashboard client (`npm run build`). Then restarts the
+three systemd units and runs `--doctor`.
+
+Run it from cron for hands-off upkeep:
+
+```cron
+# /etc/cron.d/tac-master-update — weekly, Sunday 04:00
+0 4 * * 0 root /srv/tac-master/scripts/tac-update.sh update >> /srv/tac-master/logs/update.log 2>&1
+```
+
+## 11. Optional: Podman runtime mode
+
+By default tac-master runs ADWs as native subprocesses on the LXC host.
+This is fast and simple, but all runs share the same toolchain (one
+Node version, one Python version, one uv cache, etc.).
+
+If your allowlisted repos have **heterogeneous runtime requirements**
+(different Node majors, legacy Ruby + modern Go + Java, etc.), enable
+the Podman runtime mode. Each run wraps its ADW in a rootless podman
+container:
+
+- Worktree bind-mounted at `/workspace` (rw)
+- `adws/` and `.claude/` bind-mounted read-only
+- Fresh filesystem per run (no cache leaks)
+- Per-repo `container_image` in `repos.yaml` so each repo brings its
+  own Dockerfile if needed
+- Network mode `host` so dashboard hooks still reach port 4000
+
+### Enabling Podman mode
+
+```bash
+# One-time install: apt packages + subuid/subgid + build tac-worker:latest
+sudo bash /srv/tac-master/scripts/tac-update.sh install-podman
+```
+
+This installs `podman`, `fuse-overlayfs`, `slirp4netns`, `uidmap`,
+`buildah`, `skopeo`, `passt`, configures subuid/subgid for the krypto
+user, and builds `tac-worker:latest` from
+`deploy/docker/Dockerfile.tac-worker` (takes ~5 minutes — downloads
+Node, Claude Code CLI, and Playwright Chromium into the image).
+
+Then mark the repos that should use it in `config/repos.yaml`:
+
+```yaml
+- url: https://github.com/OWNER/legacy-ruby-app
+  runtime: podman
+  container_image: tac-worker:latest   # or a per-repo image you build
+```
+
+Run the doctor to verify:
+
+```bash
+sudo -u krypto bash -lc 'cd /srv/tac-master && uv run orchestrator/daemon.py --doctor'
+# Expect:
+#   runtime: 1 repo(s) use podman — verifying...
+#   podman: ✓ podman version 4.x.x
+#   image tac-worker:latest: ✓
+```
+
+Then restart: `systemctl restart tac-master`.
+
+### Per-repo custom images
+
+If a specific repo needs its own toolchain (e.g. Ruby 3.2 + PostgreSQL
+client), build a custom image FROM `tac-worker:latest`:
+
+```dockerfile
+# /srv/tac-master/deploy/docker/Dockerfile.ruby-app
+FROM tac-worker:latest
+USER root
+RUN apt-get update && apt-get install -y ruby-full postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+USER worker
+```
+
+Build as the krypto user:
+
+```bash
+sudo -u krypto podman build \
+    -t tac-worker-ruby:latest \
+    -f /srv/tac-master/deploy/docker/Dockerfile.ruby-app \
+    /srv/tac-master
+```
+
+Then point the repo at it in `repos.yaml`:
+
+```yaml
+- url: https://github.com/OWNER/ruby-app
+  runtime: podman
+  container_image: tac-worker-ruby:latest
+```
+
+### Caveats
+
+- **Cold-start overhead**: ~2-5 seconds extra per dispatch vs. native
+- **User namespaces**: the Proxmox LXC must allow userns. Unprivileged
+  LXCs usually do by default. If `podman info` fails with `newuidmap:
+  write to uid_map failed`, set `lxc.include = /usr/share/lxc/config/nesting.conf`
+  and `features=keyctl=1,nesting=1` on the container config.
+- **Storage**: rootless podman images live in
+  `/home/krypto/.local/share/containers/`. Give the LXC enough disk
+  (+10 GB for a single `tac-worker` image).
+- **Mixed mode**: it's fine to have some repos on `runtime: native` and
+  others on `runtime: podman`. The dispatcher picks the right runner
+  per-dispatch.
+
+## 12. Security notes
 
 - The LXC container is unprivileged — even if an ADW exfiltrates a shell,
   it can't escape to the host.

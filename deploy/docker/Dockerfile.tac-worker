@@ -1,0 +1,78 @@
+# tac-worker base image.
+#
+# Used when a repo is configured with `runtime: podman` in repos.yaml.
+# Contains the full ADW toolchain: uv, Node.js 20, Claude Code CLI, gh,
+# Playwright Chromium. Worktrees and substrate are bind-mounted at
+# runtime — nothing repo-specific baked in.
+#
+# Build:
+#   podman build -t tac-worker:latest -f deploy/docker/Dockerfile.tac-worker .
+# or via install.sh:
+#   sudo bash scripts/tac-update.sh install-podman
+
+FROM debian:trixie-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+
+# ---- Base tools + Playwright Chromium runtime deps ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git jq sqlite3 build-essential \
+        python3 python3-venv python3-pip \
+        gnupg xdg-utils \
+        libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
+        libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+        libgbm1 libasound2t64 libpango-1.0-0 libcairo2 \
+        fonts-liberation \
+        procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Node.js 20 (NodeSource) ----
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- GitHub CLI ----
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+         > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Claude Code CLI (headless mode) ----
+RUN npm config -g set prefix /usr/local \
+    && npm install -g @anthropic-ai/claude-code
+
+# ---- Non-root worker user ----
+RUN useradd --create-home --shell /bin/bash --uid 1000 worker \
+    && mkdir -p /workspace && chown worker:worker /workspace
+
+# ---- uv (installed to /usr/local so both root and worker can use it) ----
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /usr/local/bin/uv \
+    && mv /root/.local/bin/uvx /usr/local/bin/uvx \
+    && chmod +x /usr/local/bin/uv /usr/local/bin/uvx
+
+# ---- Playwright Chromium (installed as worker so cache lands in its home) ----
+USER worker
+RUN npx --yes playwright@latest install chromium
+USER root
+
+# ---- Quick sanity check ----
+RUN claude --version \
+    && uv --version \
+    && node --version \
+    && gh --version | head -1
+
+# ---- Runtime configuration ----
+USER worker
+WORKDIR /workspace
+ENV PATH="/usr/local/bin:/home/worker/.local/bin:${PATH}"
+ENV NODE_OPTIONS="--max-old-space-size=2048"
+
+# The dispatcher invokes the ADW entry point directly; no CMD/ENTRYPOINT
+# wrapping is used. This keeps behavior identical to the native runner.
+CMD ["bash"]

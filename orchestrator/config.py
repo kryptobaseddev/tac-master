@@ -40,6 +40,10 @@ class RepoConfig:
     auto_merge: bool = False
     dry_run: bool = False
     env: dict[str, str] = field(default_factory=dict)
+    # Runtime mode: "native" (default, fast) or "podman" (isolated, per-repo image)
+    runtime: str = "native"
+    # Container image to use when runtime == "podman". Defaults to tac-worker:latest.
+    container_image: str = "tac-worker:latest"
 
     @property
     def slug(self) -> str:
