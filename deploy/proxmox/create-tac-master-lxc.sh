@@ -26,15 +26,29 @@
 #   CT_DISK        rootfs size in GB         (default: 32)
 #   CT_STORAGE     storage pool              (default: local-lvm)
 #   CT_BRIDGE      network bridge            (default: vmbr0)
-#   CT_IP          dhcp | CIDR (e.g. 192.168.1.50/24)  (default: dhcp)
-#   CT_GATEWAY     gateway (only if static)  (default: none)
-#   CT_DNS         DNS server                (default: inherited)
-#   CT_TIMEZONE    timezone                  (default: host tz or UTC)
-#   REPO_URL       tac-master git URL        (default: krypto-agent bot fork)
+#   CT_IP          dhcp | CIDR (e.g. 10.0.10.22/24)  (default: dhcp)
+#   CT_GATEWAY     gateway (only if static)          (default: none)
+#   CT_DNS         DNS server                        (default: inherited)
+#   CT_TIMEZONE    timezone                          (default: host tz or UTC)
+#
+#   Access to the created container:
+#   CT_ROOT_PASSWORD  root password inside LXC       (default: unset — pct enter only)
+#   CT_SSH_ENABLE     install openssh-server         (default: unset — SSH off)
+#   CT_SSH_PUBKEY     path OR contents of pubkey     (default: unset — key auth off)
+#                     accepts "/root/.ssh/id_ed25519.pub" or the raw key string
+#   CT_SSH_PORT       sshd listen port               (default: 22)
+#
+#   REPO_URL       tac-master git URL        (default: kryptobaseddev/tac-master)
 #   REPO_BRANCH    git branch                (default: main)
 #   TAC_WITH_CONTAINERS   also install podman mode (default: unset)
-#   NO_INSTALL     skip install.sh after creation (default: unset)
-#   UNATTENDED     skip all prompts                (default: unset)
+#   NO_INSTALL     skip install.sh after creation  (default: unset)
+#   UNATTENDED     skip all prompts                 (default: unset)
+#
+# Security note on access:
+#   By default no root password is set and SSH is not installed. The only
+#   way in is `pct enter <CTID>` from the Proxmox host. This is the most
+#   secure option. Enable CT_SSH_PUBKEY for remote access (safer than a
+#   password) or CT_ROOT_PASSWORD if you must.
 #
 # License: same as tac-master itself.
 
@@ -84,9 +98,30 @@ preflight() {
     command -v pct        >/dev/null 2>&1 || die "pct not found — this must run on Proxmox VE."
     command -v pveam      >/dev/null 2>&1 || die "pveam not found — this must run on Proxmox VE."
 
-    ok "Proxmox: $(pveversion | head -1)"
+    local pve_full pve_ver
+    pve_full="$(pveversion | head -1)"
+    ok "Proxmox: $pve_full"
     ok "Host:    $(hostname -f 2>/dev/null || hostname)"
     ok "Kernel:  $(uname -r)"
+
+    # Parse the pve-manager version (e.g. "pve-manager/8.1.4/ec5aff...")
+    pve_ver="$(printf '%s' "$pve_full" | awk -F/ '{print $2}')"
+    local pve_major pve_minor pve_patch
+    IFS='.' read -r pve_major pve_minor pve_patch <<< "$pve_ver"
+    pve_major="${pve_major:-0}"
+    pve_minor="${pve_minor:-0}"
+
+    # Warn if PVE is too old to recognize Debian 13.1+. PVE 8.3+ added
+    # support. Older 8.x will still work via the --ostype unmanaged
+    # fallback this script implements, but upgrading is cleaner.
+    if [[ "$pve_major" -lt 8 ]] || { [[ "$pve_major" -eq 8 ]] && [[ "$pve_minor" -lt 3 ]]; }; then
+        warn "PVE $pve_ver is older than 8.3 — Debian 13.1 template may not be in"
+        warn "the hardcoded allowlist. This script will retry with --ostype unmanaged"
+        warn "if needed, but upgrading is recommended:"
+        warn "    apt update && apt install --only-upgrade pve-container"
+        warn "  or for a full minor-version upgrade:"
+        warn "    apt update && apt dist-upgrade"
+    fi
 }
 
 # ----------------------------------------------------------------------------
@@ -105,6 +140,10 @@ set_defaults() {
     CT_GATEWAY="${CT_GATEWAY:-}"
     CT_DNS="${CT_DNS:-}"
     CT_TIMEZONE="${CT_TIMEZONE:-$(cat /etc/timezone 2>/dev/null || echo UTC)}"
+    CT_ROOT_PASSWORD="${CT_ROOT_PASSWORD:-}"
+    CT_SSH_ENABLE="${CT_SSH_ENABLE:-}"
+    CT_SSH_PUBKEY="${CT_SSH_PUBKEY:-}"
+    CT_SSH_PORT="${CT_SSH_PORT:-22}"
     REPO_URL="${REPO_URL:-https://github.com/kryptobaseddev/tac-master.git}"
     REPO_BRANCH="${REPO_BRANCH:-main}"
     TAC_WITH_CONTAINERS="${TAC_WITH_CONTAINERS:-}"
@@ -154,19 +193,53 @@ prompt_config() {
     CT_BRIDGE=$(whiptail --backtitle "tac-master" --title "Network Bridge" \
         --inputbox "Linux bridge for the LXC" 8 60 "$CT_BRIDGE" 3>&1 1>&2 2>&3) || exit 1
     CT_IP=$(whiptail --backtitle "tac-master" --title "IP Address" \
-        --inputbox "'dhcp' or CIDR (e.g. 192.168.1.50/24)" \
+        --inputbox "'dhcp' or CIDR (e.g. 10.0.10.22/24)" \
         8 60 "$CT_IP" 3>&1 1>&2 2>&3) || exit 1
 
     if [[ "$CT_IP" != "dhcp" ]]; then
         CT_GATEWAY=$(whiptail --backtitle "tac-master" --title "Gateway" \
-            --inputbox "Default gateway for static IP" \
-            8 60 "${CT_GATEWAY:-192.168.1.1}" 3>&1 1>&2 2>&3) || exit 1
+            --inputbox "Default gateway (leave blank to auto-derive .1 from IP)" \
+            8 60 "" 3>&1 1>&2 2>&3) || exit 1
+        # Auto-derive if still blank: e.g. 10.0.10.22/24 → 10.0.10.1
+        if [[ -z "$CT_GATEWAY" ]]; then
+            local ip_only="${CT_IP%/*}"
+            CT_GATEWAY="${ip_only%.*}.1"
+        fi
     fi
 
     REPO_URL=$(whiptail --backtitle "tac-master" --title "tac-master Repository" \
         --inputbox "Git URL to clone" 8 80 "$REPO_URL" 3>&1 1>&2 2>&3) || exit 1
     REPO_BRANCH=$(whiptail --backtitle "tac-master" --title "Branch" \
         --inputbox "Branch to check out" 8 60 "$REPO_BRANCH" 3>&1 1>&2 2>&3) || exit 1
+
+    # Access configuration — secure-by-default, opt in to looser modes
+    local access_choice
+    access_choice=$(whiptail --backtitle "tac-master" --title "Access Method" \
+        --menu "How should you access the LXC from outside the Proxmox host?" \
+        15 70 4 \
+        "pct"       "pct enter only (most secure, default)" \
+        "sshkey"    "SSH + public-key auth (recommended for remote)" \
+        "sshpass"   "SSH + root password (convenient, less secure)" \
+        "both"      "SSH + key + root password (max convenience)" \
+        3>&1 1>&2 2>&3) || exit 1
+
+    case "$access_choice" in
+        sshkey|both)
+            CT_SSH_ENABLE=1
+            CT_SSH_PUBKEY=$(whiptail --backtitle "tac-master" --title "SSH Public Key" \
+                --inputbox "Path to public key file OR paste the key contents" \
+                10 80 "${HOME}/.ssh/id_ed25519.pub" 3>&1 1>&2 2>&3) || exit 1
+            ;;
+    esac
+    case "$access_choice" in
+        sshpass|both)
+            CT_SSH_ENABLE=1
+            CT_ROOT_PASSWORD=$(whiptail --backtitle "tac-master" --title "Root Password" \
+                --passwordbox "Set root password (8+ chars). Used for pct enter AND SSH if enabled." \
+                10 70 3>&1 1>&2 2>&3) || exit 1
+            [[ ${#CT_ROOT_PASSWORD} -lt 8 ]] && die "Password must be at least 8 characters."
+            ;;
+    esac
 
     if whiptail --backtitle "tac-master" --title "Podman Runtime" \
         --yesno "Also install optional Podman runtime mode?\n\n(Required if any allowlisted repo uses runtime: podman in its config. Adds ~5 min to install and ~2 GB to the image.)" \
@@ -181,6 +254,24 @@ prompt_config() {
 
 show_config() {
     step "Configuration summary"
+
+    local podman_display="no (native runtime only)"
+    [[ -n "$TAC_WITH_CONTAINERS" ]] && podman_display="yes (containers opt-in)"
+
+    local install_display="yes (runs deploy/install.sh after LXC is up)"
+    [[ -n "$NO_INSTALL" ]] && install_display="SKIPPED"
+
+    local access_display="pct enter only (most secure)"
+    if [[ -n "$CT_SSH_ENABLE" ]] && [[ -n "$CT_SSH_PUBKEY" ]] && [[ -n "$CT_ROOT_PASSWORD" ]]; then
+        access_display="pct enter + SSH (pubkey + root password)"
+    elif [[ -n "$CT_SSH_ENABLE" ]] && [[ -n "$CT_SSH_PUBKEY" ]]; then
+        access_display="pct enter + SSH (pubkey auth only)"
+    elif [[ -n "$CT_SSH_ENABLE" ]] && [[ -n "$CT_ROOT_PASSWORD" ]]; then
+        access_display="pct enter + SSH (root password)"
+    elif [[ -n "$CT_ROOT_PASSWORD" ]]; then
+        access_display="pct enter (root password set, no SSH)"
+    fi
+
     cat <<EOF
   ${DIM}Container ID:${RESET}    ${BOLD}$CT_ID${RESET}
   ${DIM}Hostname:${RESET}        $CT_HOSTNAME
@@ -190,10 +281,11 @@ show_config() {
   ${DIM}Template:${RESET}        Debian 13 "Trixie" (amd64, standard)
   ${DIM}Features:${RESET}        unprivileged · nesting=1 · keyctl=1
   ${DIM}Timezone:${RESET}        $CT_TIMEZONE
+  ${DIM}Access:${RESET}          $access_display
   ${DIM}Repository:${RESET}      $REPO_URL
   ${DIM}Branch:${RESET}          $REPO_BRANCH
-  ${DIM}Podman mode:${RESET}     ${TAC_WITH_CONTAINERS:+yes (containers opt-in)}${TAC_WITH_CONTAINERS:-no (native runtime only)}
-  ${DIM}Auto-install:${RESET}    ${NO_INSTALL:+SKIPPED}${NO_INSTALL:-yes (runs deploy/install.sh after LXC is up)}
+  ${DIM}Podman mode:${RESET}     $podman_display
+  ${DIM}Auto-install:${RESET}    $install_display
 
 EOF
 }
@@ -256,24 +348,83 @@ create_container() {
         [[ -n "$CT_GATEWAY" ]] && net_arg="${net_arg},gw=${CT_GATEWAY}"
     fi
 
-    # Note: we omit --password so the container has no root password.
-    # Access is via `pct enter` from the Proxmox host only.
-    pct create "$CT_ID" "$TEMPLATE_REF" \
-        --hostname   "$CT_HOSTNAME" \
-        --cores      "$CT_CORES" \
-        --memory     "$CT_MEMORY" \
-        --swap       "$CT_SWAP" \
-        --rootfs     "${CT_STORAGE}:${CT_DISK}" \
-        --net0       "$net_arg" \
-        --features   nesting=1,keyctl=1 \
-        --unprivileged 1 \
-        --onboot     1 \
-        --ostype     debian \
-        --tags       "tac-master;agent;debian-13" \
-        --description "tac-master autonomous TAC orchestrator. See https://github.com/kryptobaseddev/tac-master" \
-        || die "pct create failed"
+    # Resolve the SSH pubkey early so we can inject via --ssh-public-keys
+    local ssh_key_file=""
+    if [[ -n "$CT_SSH_PUBKEY" ]]; then
+        if [[ -f "$CT_SSH_PUBKEY" ]]; then
+            ssh_key_file="$CT_SSH_PUBKEY"
+        elif [[ "$CT_SSH_PUBKEY" =~ ^(ssh-|ecdsa-|sk-) ]]; then
+            # Treat as raw key content — write to a temp file
+            ssh_key_file="$(mktemp /tmp/tac-master-pubkey.XXXXXX)"
+            printf '%s\n' "$CT_SSH_PUBKEY" > "$ssh_key_file"
+            # Use an EXIT trap to clean up
+            trap "rm -f '$ssh_key_file'" EXIT
+        else
+            warn "CT_SSH_PUBKEY is neither a file nor a recognized key format — ignoring"
+        fi
+    fi
 
-    ok "LXC $CT_ID created"
+    # Build the pct create argv. We'll invoke it with --ostype debian first
+    # and fall back to --ostype unmanaged if Proxmox rejects the Debian
+    # version (a known issue on PVE 8.x before pve-container was updated
+    # to recognize Debian 13.1+).
+    local -a pct_args=(
+        "$CT_ID" "$TEMPLATE_REF"
+        --hostname     "$CT_HOSTNAME"
+        --cores        "$CT_CORES"
+        --memory       "$CT_MEMORY"
+        --swap         "$CT_SWAP"
+        --rootfs       "${CT_STORAGE}:${CT_DISK}"
+        --net0         "$net_arg"
+        --features     "nesting=1,keyctl=1"
+        --unprivileged 1
+        --onboot       1
+        --tags         "tac-master;agent;debian-13"
+        --description  "tac-master autonomous TAC orchestrator. See https://github.com/kryptobaseddev/tac-master"
+    )
+
+    # Root password (omit the flag entirely if not set — no password)
+    if [[ -n "$CT_ROOT_PASSWORD" ]]; then
+        pct_args+=( --password "$CT_ROOT_PASSWORD" )
+    fi
+
+    # SSH pubkey injection during create (Proxmox writes it to
+    # /root/.ssh/authorized_keys inside the container)
+    if [[ -n "$ssh_key_file" ]]; then
+        pct_args+=( --ssh-public-keys "$ssh_key_file" )
+    fi
+
+    # --- Attempt 1: --ostype debian (the preferred path) ---
+    log "Attempt 1: pct create with --ostype debian"
+    local create_out
+    if create_out=$(pct create "${pct_args[@]}" --ostype debian 2>&1); then
+        ok "LXC $CT_ID created (ostype: debian)"
+        return 0
+    fi
+
+    # --- Failure handling ---
+    printf '%s\n' "$create_out" | sed 's/^/    /'
+
+    # Detect the "unsupported debian version" failure and auto-retry with
+    # --ostype unmanaged. Proxmox's Debian.pm allowlist doesn't always
+    # include every Debian point release; unmanaged skips the check.
+    if printf '%s' "$create_out" | grep -qE "unsupported debian version"; then
+        warn "Your Proxmox's pve-container doesn't recognize this Debian point release."
+        warn "Retrying with --ostype unmanaged (fully supported alternative)..."
+
+        # Clean up any partial LV left by the failed first attempt
+        pct destroy "$CT_ID" --purge >/dev/null 2>&1 || true
+
+        if pct create "${pct_args[@]}" --ostype unmanaged 2>&1 | sed 's/^/    /'; then
+            ok "LXC $CT_ID created (ostype: unmanaged)"
+            # Signal downstream steps that they need to do manual fixups
+            export OSTYPE_UNMANAGED=1
+            return 0
+        fi
+        die "pct create failed even with --ostype unmanaged. See errors above."
+    fi
+
+    die "pct create failed for a reason other than Debian version. See errors above."
 }
 
 # ----------------------------------------------------------------------------
@@ -283,6 +434,16 @@ create_container() {
 start_container() {
     step "Starting LXC"
     pct start "$CT_ID" || die "pct start failed"
+
+    # If we fell back to --ostype unmanaged, Proxmox didn't rewrite /etc/hostname
+    # inside the container. Do it ourselves before anything else so hostname is
+    # correct for the rest of the install.
+    if [[ -n "${OSTYPE_UNMANAGED:-}" ]]; then
+        log "Applying unmanaged-mode fixups (hostname, hosts)..."
+        pct exec "$CT_ID" -- bash -c "echo '$CT_HOSTNAME' > /etc/hostname && hostname '$CT_HOSTNAME'" 2>/dev/null || true
+        pct exec "$CT_ID" -- bash -c "grep -q '127.0.1.1' /etc/hosts || echo '127.0.1.1 $CT_HOSTNAME' >> /etc/hosts" 2>/dev/null || true
+        ok "Hostname and /etc/hosts fixed"
+    fi
 
     log "Waiting for network..."
     local i
@@ -312,6 +473,38 @@ start_container() {
         sleep 2
     done
     ok "Package manager ready"
+}
+
+# ----------------------------------------------------------------------------
+# Optional: install + enable SSH inside the container
+# ----------------------------------------------------------------------------
+
+setup_ssh() {
+    [[ -n "$CT_SSH_ENABLE" ]] || return 0
+
+    step "Installing SSH server"
+    pct exec "$CT_ID" -- bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server' \
+        >/dev/null 2>&1 \
+        || die "Failed to install openssh-server"
+
+    # If a non-default port was requested, configure sshd
+    if [[ "$CT_SSH_PORT" != "22" ]]; then
+        pct exec "$CT_ID" -- bash -c "sed -i 's/^#Port 22/Port $CT_SSH_PORT/' /etc/ssh/sshd_config"
+    fi
+
+    # Disable password auth if we're in pubkey-only mode
+    if [[ -n "$CT_SSH_PUBKEY" ]] && [[ -z "$CT_ROOT_PASSWORD" ]]; then
+        pct exec "$CT_ID" -- bash -c "sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
+        pct exec "$CT_ID" -- bash -c "sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config"
+        ok "sshd: pubkey-only auth (root password login disabled)"
+    elif [[ -n "$CT_ROOT_PASSWORD" ]]; then
+        pct exec "$CT_ID" -- bash -c "sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config"
+        warn "sshd: root password login ENABLED (less secure, but you asked for it)"
+    fi
+
+    pct exec "$CT_ID" -- bash -c 'systemctl enable ssh && systemctl restart ssh' \
+        || warn "Failed to start ssh service"
+    ok "sshd running on port $CT_SSH_PORT"
 }
 
 # ----------------------------------------------------------------------------
@@ -356,6 +549,20 @@ install_tac_master() {
 # ----------------------------------------------------------------------------
 
 print_summary() {
+    local access_lines=""
+    access_lines+="    • ${CYAN}pct enter $CT_ID${RESET}  (from the Proxmox host, always works)"$'\n'
+    if [[ -n "$CT_SSH_ENABLE" ]]; then
+        if [[ -n "$CT_SSH_PUBKEY" ]] && [[ -z "$CT_ROOT_PASSWORD" ]]; then
+            access_lines+="    • ${CYAN}ssh -p $CT_SSH_PORT root@$CT_ACTUAL_IP${RESET}  (pubkey auth only — password login disabled)"$'\n'
+        elif [[ -n "$CT_SSH_PUBKEY" ]] && [[ -n "$CT_ROOT_PASSWORD" ]]; then
+            access_lines+="    • ${CYAN}ssh -p $CT_SSH_PORT root@$CT_ACTUAL_IP${RESET}  (pubkey or root password)"$'\n'
+        else
+            access_lines+="    • ${CYAN}ssh -p $CT_SSH_PORT root@$CT_ACTUAL_IP${RESET}  (root password)"$'\n'
+        fi
+    else
+        access_lines+="    • ${DIM}SSH is NOT installed. pct enter only.${RESET}"$'\n'
+    fi
+
     cat <<EOF
 
 ${GREEN}${BOLD}╔═══════════════════════════════════════════════════════════════════╗${RESET}
@@ -364,12 +571,14 @@ ${GREEN}${BOLD}╚════════════════════�
 
   ${BOLD}Container:${RESET}       $CT_ID ($CT_HOSTNAME)
   ${BOLD}IP address:${RESET}      ${CYAN}$CT_ACTUAL_IP${RESET}
-  ${BOLD}Shell access:${RESET}    pct enter $CT_ID
   ${BOLD}Installed at:${RESET}    /srv/tac-master (inside LXC)
+
+  ${BOLD}Access methods:${RESET}
+$access_lines
 
   ${BOLD}Next steps${RESET} (run from the Proxmox host):
 
-  ${MAGENTA}1.${RESET} Enter the container:
+  ${MAGENTA}1.${RESET} Enter the container using any access method above, e.g.:
        ${CYAN}pct enter $CT_ID${RESET}
 
   ${MAGENTA}2.${RESET} Fill in your secrets:
@@ -416,5 +625,6 @@ confirm
 ensure_template
 create_container
 start_container
+setup_ssh
 install_tac_master
 print_summary
