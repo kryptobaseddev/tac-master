@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  @apply h-full bg-ink-900 text-ink-100 font-mono text-sm antialiased;
+}
+
+#app {
+  @apply h-full;
+}
+
+::-webkit-scrollbar {
+  @apply w-2 h-2;
+}
+::-webkit-scrollbar-track {
+  @apply bg-ink-900;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-ink-600 rounded;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-ink-400;
+}

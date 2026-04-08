@@ -170,15 +170,79 @@ its own repo. The safety net is:
 
 ## Open items
 
-- **Webhook listener** — `adws/adw_triggers/trigger_webhook.py` is lifted
-  from tac-7 but not wired into systemd. Adding it would need a second
-  unit file and a reverse proxy.
-- **Dashboard** — `tac-8/app3` has a Bun+Vue real-time event dashboard
-  fed by `.claude/hooks/send_event.py`. Porting it would give per-repo
-  and cross-repo observability.
-- **Token accounting** — the hook into claude-code JSONL parsing for
-  budget.record_tokens() is a TODO; currently runs are counted but tokens
-  are not yet attributed per-run.
-- **Knowledge retrieval** — lessons are written to markdown but not yet
-  surfaced to Leads via prompt injection. Needs a hook in the
-  classify/plan slash commands.
+All four originally-deferred items are now shipped:
+
+- **✓ Token accounting** — `orchestrator/token_tracker.py` parses
+  `agents/<adw_id>/*/cc_raw_output.jsonl` after every run completion and
+  writes to a new `token_ledger` table + `budget_usage` rollup.
+  Idempotent. Priced from `config/model_prices.yaml`. Wired into
+  `Dispatcher.reap_finished_runs()`.
+
+- **✓ Knowledge retrieval** — `orchestrator/knowledge.py` provides an
+  FTS5-backed `lessons` table with BM25 ranking. `adw_reflect_iso.py`
+  writes both a markdown sidecar and a DB row. Dispatcher pulls top-K
+  relevant lessons at dispatch time and writes them into the worktree as
+  `agents/_knowledge/prompt_tail.md` for the Lead to consume.
+
+- **✓ Webhook listener** — `orchestrator/webhook_server.py` is a
+  standalone FastAPI service on port 8088 with HMAC verification, routing
+  to the same dispatcher the daemon uses. Installed as
+  `tac-master-webhook.service`.
+
+- **✓ Dashboard** — `dashboard/server` (Bun + SQLite) and
+  `dashboard/client` (Vue 3 + Vite + Tailwind) ported from tac-8/app3
+  with `repo_url` added to the events schema. Includes a `RepoStatusBoard`
+  tile view, a `RunsPanel` active-runs list, and a live-filtered
+  `EventStream`. Fed by `.claude/hooks/send_event.py` on all 7 hooks.
+  Runs as `tac-master-dashboard.service` on port 4000 (API + WebSocket).
+
+## Data flow at steady state
+
+```
+GitHub issue/comment
+    │
+    ├── polling daemon (20s cycle)  ─┐
+    └── webhook server (real-time)  ─┤
+                                     │
+                                     ▼
+                              Dispatcher._dispatch
+                                     │
+                  ┌──────────────────┼──────────────────┐
+                  ▼                  ▼                  ▼
+             budget check      knowledge.fetch     repo_manager
+             (can_dispatch)    (prompt_tail.md)    (clone+worktree)
+                                     │
+                                     ▼
+                               Lead subprocess
+                          (adw_plan_iso.py ...)
+                                     │
+               ┌─────────────┬───────┴───────┬─────────────┐
+               ▼             ▼               ▼             ▼
+           Worker       Worker          Worker         Worker
+           (plan)       (build)         (test)         (review)
+               │             │               │             │
+               └──── writes cc_raw_output.jsonl ────────────┘
+                                     │
+         .claude/hooks/send_event.py fires on every tool use
+                                     │
+                                     ▼
+                        dashboard :4000 /events
+                                     │
+                                     ▼
+                          Bun SQLite + WS broadcast
+                                     │
+                                     ▼
+                    Vue 3 dashboard (repo board, runs, stream)
+
+After Lead exits:
+
+    reap_finished_runs
+         │
+         ├── token_tracker.attribute_run   → budget_usage + token_ledger
+         ├── adw_reflect_iso.py            → state/knowledge/ + lessons table
+         └── events table                  → "phase_end" recorded
+```
+
+Everything writes to the single `state/tac_master.sqlite` file (WAL mode),
+which the dashboard opens read-only alongside its own `dashboard.sqlite`
+for hook events.

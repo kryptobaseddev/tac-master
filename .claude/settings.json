@@ -9,6 +9,9 @@
       "Bash(npm:*)",
       "Bash(ls:*)",
       "Bash(cp:*)",
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(sqlite3:*)",
       "Write",
       "Bash(./scripts/copy_dot_env.sh:*)",
       "Bash(chmod:*)",
@@ -28,6 +31,10 @@
           {
             "type": "command",
             "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/pre_tool_use.py || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/send_event.py --source-app tac-master --event-type PreToolUse || true"
           }
         ]
       }
@@ -39,6 +46,10 @@
           {
             "type": "command",
             "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/post_tool_use.py || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/send_event.py --source-app tac-master --event-type PostToolUse || true"
           }
         ]
       }
@@ -50,6 +61,10 @@
           {
             "type": "command",
             "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/notification.py --notify || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/send_event.py --source-app tac-master --event-type Notification || true"
           }
         ]
       }
@@ -61,6 +76,10 @@
           {
             "type": "command",
             "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/stop.py --chat || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/send_event.py --source-app tac-master --event-type Stop --add-chat || true"
           }
         ]
       }
@@ -72,6 +91,10 @@
           {
             "type": "command",
             "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/subagent_stop.py || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/send_event.py --source-app tac-master --event-type SubagentStop || true"
           }
         ]
       }
@@ -83,6 +106,10 @@
           {
             "type": "command",
             "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/pre_compact.py || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/send_event.py --source-app tac-master --event-type PreCompact || true"
           }
         ]
       }
@@ -94,6 +121,10 @@
           {
             "type": "command",
             "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/user_prompt_submit.py --log-only || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/send_event.py --source-app tac-master --event-type UserPromptSubmit || true"
           }
         ]
       }

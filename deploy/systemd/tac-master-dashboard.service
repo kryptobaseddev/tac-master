@@ -1,0 +1,37 @@
+[Unit]
+Description=tac-master dashboard (Bun server + WebSocket)
+Documentation=https://github.com/OWNER/tac-master
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=krypto
+Group=krypto
+WorkingDirectory=/srv/tac-master/dashboard/server
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/krypto/.bun/bin
+Environment=TAC_MASTER_DB=/srv/tac-master/state/tac_master.sqlite
+Environment=TAC_DASHBOARD_DB=/srv/tac-master/state/dashboard.sqlite
+Environment=PORT=4000
+ExecStart=/home/krypto/.bun/bin/bun src/index.ts
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/srv/tac-master
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+
+StandardOutput=append:/srv/tac-master/logs/dashboard.stdout.log
+StandardError=append:/srv/tac-master/logs/dashboard.stderr.log
+
+[Install]
+WantedBy=multi-user.target

@@ -27,8 +27,10 @@ from pathlib import Path
 from .budget import BudgetEnforcer
 from .config import RepoConfig, TacMasterConfig
 from .github_client import GitHubClient, Issue
+from .knowledge import KnowledgeBase
 from .repo_manager import RepoHandle, RepoManager
 from .state_store import StateStore
+from .token_tracker import TokenTracker
 
 log = logging.getLogger(__name__)
 
@@ -52,12 +54,17 @@ class Dispatcher:
         repo_mgr: RepoManager,
         gh: GitHubClient,
         budget: BudgetEnforcer,
+        tokens: TokenTracker | None = None,
     ):
         self.cfg = cfg
         self.store = store
         self.repo_mgr = repo_mgr
         self.gh = gh
         self.budget = budget
+        self.tokens = tokens or TokenTracker(
+            store, cfg.home / "config" / "model_prices.yaml"
+        )
+        self.kb = KnowledgeBase(store)
 
     # ------------------------------------------------------------------
     def poll_once(self) -> int:
@@ -164,6 +171,26 @@ class Dispatcher:
         self.store.update_run(adw_id, worktree_path=str(wt_path), status="running")
         self.budget.record_dispatch(repo.url)
 
+        # Inject top-K relevant lessons into the worktree as a prompt tail
+        # for the Lead's classifier/planner to discover.
+        try:
+            lessons = self.kb.fetch_relevant(issue.title, repo.url, k=3)
+            if lessons:
+                tail_path = self.kb.write_prompt_tail(wt_path, lessons)
+                log.info("Injected %d lessons into %s", len(lessons), tail_path)
+                self.store.record_event(
+                    "knowledge",
+                    json.dumps({
+                        "adw_id": adw_id,
+                        "lesson_count": len(lessons),
+                        "lesson_adws": [l.adw_id for l in lessons],
+                    }),
+                    repo_url=repo.url,
+                    adw_id=adw_id,
+                )
+        except Exception as e:
+            log.warning("Knowledge injection failed (non-fatal): %s", e)
+
         # Launch the Lead process. We cd into the clone (not the worktree),
         # because tac-7's ADW scripts expect to run from <project_root>/adws/
         # and will find the pre-created worktree via state validation.
@@ -245,6 +272,21 @@ class Dispatcher:
             adw_id = run["adw_id"]
             final_status = self._infer_final_status(run)
             log.info("Run %s finished: %s", adw_id, final_status)
+
+            # Attribute tokens + cost before marking the run finished so
+            # budget counters are accurate at dispatch decision time.
+            wt = run.get("worktree_path")
+            if wt:
+                try:
+                    usage = self.tokens.attribute_run(
+                        adw_id, Path(wt), run["repo_url"])
+                    log.info(
+                        "Tokens adw=%s tokens=%d cost=$%.4f",
+                        adw_id, usage.total_tokens, usage.cost_usd,
+                    )
+                except Exception as e:
+                    log.exception("Token attribution failed for %s: %s", adw_id, e)
+
             self.store.update_run(adw_id, status=final_status, ended_at=_now())
             self.store.set_issue_status(
                 run["repo_url"], run["issue_number"],
@@ -256,6 +298,38 @@ class Dispatcher:
                 repo_url=run["repo_url"],
                 adw_id=adw_id,
             )
+
+            # Run reflection (self-improvement lesson writer) — fire and forget.
+            # Failures here should not block the daemon or reap cycle.
+            try:
+                self._run_reflect(adw_id, run)
+            except Exception as e:
+                log.warning("Reflect failed for %s: %s", adw_id, e)
+
+    def _run_reflect(self, adw_id: str, run: dict) -> None:
+        """Spawn adw_reflect_iso to write a lesson for this finished run."""
+        import os
+        import subprocess
+        wt = run.get("worktree_path")
+        if not wt:
+            return
+        script = Path(wt) / "adws" / "adw_reflect_iso.py"
+        if not script.exists():
+            # Fallback: use tac-master's own copy
+            script = self.cfg.home / "adws" / "adw_reflect_iso.py"
+        if not script.exists():
+            return
+        env = os.environ.copy()
+        env["TAC_MASTER_HOME"] = str(self.cfg.home)
+        env["GITHUB_REPO_URL"] = run["repo_url"]
+        subprocess.Popen(
+            ["uv", "run", str(script), adw_id],
+            cwd=wt,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
     def _infer_final_status(self, run: dict) -> str:
         """Peek at the ADW's state.json to see if it reached the ship phase."""

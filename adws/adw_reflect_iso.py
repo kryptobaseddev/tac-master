@@ -130,6 +130,7 @@ def write_lesson(adw_id: str) -> int:
     branch_name = state.get("branch_name", "")
     worktree_path = state.get("worktree_path", "")
     plan_file = state.get("plan_file")
+    issue_class = state.get("issue_class", "unknown")
     result = "succeeded" if state.get("plan_file") and state.get("all_adws") else "failed"
 
     title = branch_name or f"issue-{issue_number}"
@@ -159,6 +160,37 @@ def write_lesson(adw_id: str) -> int:
     out = knowledge_dir / f"{date}__{slug}__{adw_id}.md"
     out.write_text(body)
     logger.info("Lesson written to %s", out)
+
+    # Also persist to the SQLite knowledge base (FTS5) so the dispatcher
+    # can retrieve relevant lessons at future dispatch time.
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(home))
+        from orchestrator.state_store import StateStore  # type: ignore
+        from orchestrator.knowledge import KnowledgeBase  # type: ignore
+
+        sqlite_path = home / "state" / "tac_master.sqlite"
+        if sqlite_path.exists():
+            store = StateStore(sqlite_path)
+            kb = KnowledgeBase(store)
+            tags = [workflow, result, issue_class]
+            kb.upsert(
+                adw_id=adw_id,
+                repo_url=repo,
+                title=title,
+                body=body,
+                issue_number=int(issue_number) if str(issue_number).isdigit() else None,
+                workflow=workflow,
+                result=result,
+                tags=[t for t in tags if t],
+                markdown_path=str(out),
+            )
+            logger.info("Lesson also indexed in knowledge base")
+            store.close()
+    except Exception as e:
+        # Fall through silently — markdown sidecar is always written
+        logger.warning("KB persist failed (non-fatal): %s", e)
+
     print(str(out))
     return 0
 

@@ -39,8 +39,10 @@ from orchestrator.budget import BudgetEnforcer
 from orchestrator.config import TacMasterConfig, load_config
 from orchestrator.dispatcher import Dispatcher
 from orchestrator.github_client import GitHubClient
+from orchestrator.knowledge import KnowledgeBase
 from orchestrator.repo_manager import RepoManager
 from orchestrator.state_store import StateStore
+from orchestrator.token_tracker import TokenTracker
 
 
 _shutdown = False
@@ -76,10 +78,13 @@ def _configure_logging(cfg: TacMasterConfig) -> None:
 
 def _build_system(cfg: TacMasterConfig) -> tuple[Dispatcher, StateStore, GitHubClient]:
     store = StateStore(cfg.sqlite_path)
+    # Pre-create KB schema so FTS5 triggers exist before any reflect runs
+    KnowledgeBase(store)
     gh = GitHubClient(cfg.identity["GITHUB_PAT"])
     repo_mgr = RepoManager(cfg.home, cfg.repos_dir, cfg.trees_dir, cfg.identity)
     budget = BudgetEnforcer(cfg.budgets, store)
-    dispatcher = Dispatcher(cfg, store, repo_mgr, gh, budget)
+    tokens = TokenTracker(store, cfg.home / "config" / "model_prices.yaml")
+    dispatcher = Dispatcher(cfg, store, repo_mgr, gh, budget, tokens)
     return dispatcher, store, gh
 
 
@@ -122,6 +127,37 @@ def cmd_doctor(cfg: TacMasterConfig) -> int:
         print(f"  substrate {sub}: {'✓' if p.exists() else '✗ MISSING'}")
         if not p.exists():
             problems += 1
+
+    # Check state store + knowledge base schema
+    try:
+        store = StateStore(cfg.sqlite_path)
+        KnowledgeBase(store)  # ensures FTS5 triggers exist
+        with store.conn() as c:
+            tables = [r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()]
+        required = {"repos", "issues", "runs", "phases", "events",
+                    "budget_usage", "token_ledger", "lessons"}
+        missing = required - set(tables)
+        if missing:
+            print(f"  schema: ✗ missing {missing}")
+            problems += 1
+        else:
+            print(f"  schema: ✓ {len(tables)} tables (incl. FTS5)")
+        store.close()
+    except Exception as e:
+        print(f"  schema: ✗ {e}")
+        problems += 1
+
+    # Check price book
+    prices = cfg.home / "config" / "model_prices.yaml"
+    print(f"  pricing: {'✓' if prices.exists() else '✗ MISSING'}")
+    if not prices.exists():
+        problems += 1
+
+    # Check dashboard server presence (optional, warn-only)
+    dash = cfg.home / "dashboard" / "server" / "src" / "index.ts"
+    print(f"  dashboard: {'✓' if dash.exists() else '⚠ not built (optional)'}")
 
     print(f"\n{'✓ all checks passed' if problems == 0 else f'✗ {problems} problem(s)'}")
     return problems

@@ -44,7 +44,7 @@ if ! command -v gh >/dev/null 2>&1; then
     apt-get install -y gh
 fi
 
-# ---- Node.js (for claude CLI + dashboard) ----
+# ---- Node.js (for claude CLI + dashboard client build) ----
 if ! command -v node >/dev/null 2>&1; then
     log "Installing Node.js 20.x..."
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -55,6 +55,12 @@ fi
 if ! command -v claude >/dev/null 2>&1; then
     log "Installing Claude Code CLI..."
     npm install -g @anthropic-ai/claude-code || log "claude-code install failed; install manually later"
+fi
+
+# ---- Bun (for dashboard server) ----
+if ! sudo -u "$TAC_USER" bash -lc 'command -v bun' >/dev/null 2>&1; then
+    log "Installing Bun for $TAC_USER..."
+    sudo -u "$TAC_USER" bash -lc 'curl -fsSL https://bun.sh/install | bash'
 fi
 
 # ---- Create service user ----
@@ -98,11 +104,25 @@ if [[ ! -f config/identity.env ]]; then
 fi
 chown -R "$TAC_USER:$TAC_USER" "$TAC_HOME"
 
-# ---- Install systemd unit ----
-log "Installing systemd unit..."
+# ---- Build the dashboard client (optional; warn on failure) ----
+if [[ -d "$TAC_HOME/dashboard/client" ]]; then
+    log "Installing dashboard client dependencies..."
+    if sudo -u "$TAC_USER" bash -lc "cd $TAC_HOME/dashboard/client && npm install && npm run build"; then
+        log "Dashboard client built → $TAC_HOME/dashboard/client/dist"
+    else
+        log "Dashboard client build failed (non-fatal; can run via 'npm run dev')"
+    fi
+fi
+
+# ---- Install systemd units ----
+log "Installing systemd units..."
 install -m 0644 deploy/systemd/tac-master.service /etc/systemd/system/tac-master.service
+install -m 0644 deploy/systemd/tac-master-webhook.service /etc/systemd/system/tac-master-webhook.service
+install -m 0644 deploy/systemd/tac-master-dashboard.service /etc/systemd/system/tac-master-dashboard.service
 systemctl daemon-reload
 systemctl enable tac-master.service
+systemctl enable tac-master-webhook.service
+systemctl enable tac-master-dashboard.service
 
 log ""
 log "Installation complete."
@@ -111,5 +131,9 @@ log "Next steps:"
 log "  1. Edit $TAC_HOME/config/identity.env  — add GITHUB_PAT + ANTHROPIC_API_KEY"
 log "  2. Edit $TAC_HOME/config/repos.yaml    — add repos to the allowlist"
 log "  3. Run doctor:    sudo -u $TAC_USER bash -lc 'cd $TAC_HOME && uv run orchestrator/daemon.py --doctor'"
-log "  4. Start service: systemctl start tac-master"
+log "  4. Start services:"
+log "       systemctl start tac-master             # polling daemon"
+log "       systemctl start tac-master-webhook     # real-time webhook listener (port 8088)"
+log "       systemctl start tac-master-dashboard   # observability dashboard (port 4000 / client 5173)"
 log "  5. Watch logs:    journalctl -u tac-master -f"
+log "  6. Open dashboard: http://<lxc-ip>:5173 (or 4000 for API health)"
