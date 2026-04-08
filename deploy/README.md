@@ -139,7 +139,98 @@ pointing at the webhook script.
 | List active runs | `sqlite3 .../tac_master.sqlite "SELECT adw_id, repo_url, issue_number, status FROM runs WHERE status IN ('pending', 'running');"` |
 | Check budget | `sqlite3 .../tac_master.sqlite "SELECT * FROM budget_usage WHERE day=date('now');"` |
 
-## 9. Security notes
+## 9. Headless Claude Code operation
+
+**tac-master runs Claude Code CLI as a pure subprocess with no TTY, no
+browser, and no interactive login.** This is a first-class supported mode
+of the CLI. You do **not** need to run `claude login` on the LXC.
+
+### How it works
+
+Every ADW phase (plan / build / test / review / document / ship) invokes
+the `claude` binary via `adws/adw_modules/agent.py` with these flags:
+
+```
+claude -p "<prompt>" \
+       --model <sonnet|opus|haiku> \
+       --output-format stream-json \
+       --verbose \
+       --dangerously-skip-permissions \
+       [--mcp-config .mcp.json]
+```
+
+- `-p` is **print mode** — single prompt, machine-readable output, exits
+  when done. Zero interactive surface.
+- `--output-format stream-json` produces a JSONL event stream that
+  tac-master's `token_tracker.py` parses for cost accounting.
+- `--dangerously-skip-permissions` bypasses tool-permission prompts.
+  Safety is enforced upstream via `config/policies.yaml` (forbidden
+  paths, diff caps) and the fine-grained PAT allowlist.
+- `--mcp-config .mcp.json` loads the Playwright MCP server for the
+  review phase (screenshots + visual regression).
+
+Authentication is via the `ANTHROPIC_API_KEY` environment variable,
+which the systemd unit reads from `config/identity.env` and propagates to
+every child process.
+
+### No `claude login` required
+
+The CLI's login flow stores credentials in `~/.claude/.credentials.json`
+for interactive use with an Anthropic subscription. tac-master does not
+use this flow — it uses API-key auth instead. This has three advantages:
+
+1. **Works in headless containers** with no GUI / no browser
+2. **No session expiry** — API keys don't refresh
+3. **Per-token budget attribution** — the API returns usage/cost in the
+   stream, which tac-master accumulates into `token_ledger`
+
+### Why the CLI and not the raw Agent SDK?
+
+The Agent SDK is the runtime library underneath Claude Code CLI. The CLI
+adds four things tac-master depends on:
+
+1. **Slash commands** — `.claude/commands/*.md` (28 of them)
+2. **Hooks** — `.claude/hooks/*.py` (7 lifecycle hooks)
+3. **MCP auto-loading** via `--mcp-config`
+4. **Subagent support** via `.claude/agents/`
+
+Replacing the CLI with the raw SDK would require reimplementing all of
+this as Python code. The CLI runs cleanly headless, so there's no reason
+to do that rewrite.
+
+### Verifying the install
+
+```bash
+# As the service user:
+sudo -u krypto bash -lc 'claude --version'
+# Should print something like: 1.0.x (Claude Code)
+
+# Then run the doctor, which exercises the full env:
+sudo -u krypto bash -lc 'cd /srv/tac-master && uv run orchestrator/daemon.py --doctor'
+# Looks for: claude code: ✓ ... (path)
+#            playwright: ✓ cache at /home/krypto/.cache/ms-playwright
+#            mcp config .mcp.json: ✓
+```
+
+### Optional: using an Anthropic subscription instead of API key
+
+If you'd rather bill the bot's usage to an Anthropic Pro/Max subscription
+tied to a Google/email account, you have to:
+
+1. SSH into the LXC with X11 forwarding or use a VNC session
+2. Run `sudo -u krypto claude login` interactively once
+3. The token lands in `~krypto/.claude/.credentials.json`
+
+**Not recommended** for autonomous operation:
+- Sessions can expire and require re-login (which halts the bot)
+- No per-run cost attribution (the SDK only returns usage for API-key auth)
+- You'd need to drop `ANTHROPIC_API_KEY` from `identity.env` so the CLI
+  falls back to credential auth
+
+For a long-running autonomous agent on a server, **stick with the API
+key** unless you have a strong reason to use a subscription.
+
+## 10. Security notes
 
 - The LXC container is unprivileged — even if an ADW exfiltrates a shell,
   it can't escape to the host.

@@ -29,7 +29,12 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     ca-certificates curl git jq sqlite3 build-essential \
     python3 python3-venv python3-pip \
-    sudo systemd procps
+    sudo systemd procps \
+    xdg-utils                                   `# claude code runtime dep` \
+    libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libgbm1 libasound2t64 libpango-1.0-0 libcairo2 \
+    fonts-liberation                            `# Playwright Chromium runtime deps`
 
 # ---- GitHub CLI (gh) ----
 if ! command -v gh >/dev/null 2>&1; then
@@ -51,10 +56,47 @@ if ! command -v node >/dev/null 2>&1; then
     apt-get install -y nodejs
 fi
 
-# ---- Claude Code CLI ----
+# Ensure npm global bin lives under /usr/local/bin (in PATH for all users)
+# and is writable by root only (no EACCES surprises on re-install).
+npm config -g set prefix /usr/local
+
+# ---- Claude Code CLI (HEADLESS MODE) ----
+# The `claude` binary is invoked as a pure subprocess by the ADWs with:
+#   claude -p "<prompt>" --model <m> --output-format stream-json --verbose
+#         --dangerously-skip-permissions [--mcp-config .mcp.json]
+# Authentication is via ANTHROPIC_API_KEY env var — NO `claude login` needed,
+# NO TTY required, NO browser needed. This runs cleanly in an LXC.
+log "Installing Claude Code CLI (@anthropic-ai/claude-code)..."
 if ! command -v claude >/dev/null 2>&1; then
-    log "Installing Claude Code CLI..."
-    npm install -g @anthropic-ai/claude-code || log "claude-code install failed; install manually later"
+    npm install -g @anthropic-ai/claude-code \
+        || err "claude-code install failed. Run: npm install -g @anthropic-ai/claude-code"
+fi
+
+# Verify the binary is callable and print its version
+CLAUDE_BIN="$(command -v claude || true)"
+if [[ -z "$CLAUDE_BIN" ]]; then
+    err "claude binary not found in PATH after install. Check npm prefix."
+fi
+if CLAUDE_VERSION="$(claude --version 2>&1)"; then
+    log "✓ claude installed: $CLAUDE_VERSION  ($CLAUDE_BIN)"
+else
+    err "claude --version failed. Binary may be broken: $CLAUDE_BIN"
+fi
+
+# Also verify krypto can run it (after user creation below — see doctor)
+# Doctor will re-verify as the service user before starting.
+
+# ---- Playwright browsers (Chromium for the review phase) ----
+# tac-master's review phase uses Playwright via MCP to take screenshots
+# and verify UI changes. Install Chromium with bundled deps. This is
+# idempotent — safe to re-run.
+log "Installing Playwright Chromium (for review phase)..."
+if ! sudo -u "$TAC_USER" bash -lc 'test -d ~/.cache/ms-playwright' >/dev/null 2>&1; then
+    # Install as krypto so the browser cache lives in their home
+    sudo -u "$TAC_USER" bash -lc 'npx --yes playwright@latest install chromium' \
+        || log "⚠ Playwright chromium install failed (review phase will be degraded; fix manually)"
+else
+    log "✓ Playwright chromium cache already present"
 fi
 
 # ---- Bun (for dashboard server) ----
@@ -104,6 +146,16 @@ if [[ ! -f config/identity.env ]]; then
 fi
 chown -R "$TAC_USER:$TAC_USER" "$TAC_HOME"
 
+# ---- Verify krypto can actually invoke claude ----
+log "Verifying claude is callable by $TAC_USER..."
+if sudo -u "$TAC_USER" bash -lc 'claude --version' >/dev/null 2>&1; then
+    KRYPTO_CLAUDE_VER="$(sudo -u "$TAC_USER" bash -lc 'claude --version' 2>&1)"
+    log "✓ $TAC_USER can run claude: $KRYPTO_CLAUDE_VER"
+else
+    log "⚠ $TAC_USER cannot run claude. Check PATH in ~$TAC_USER/.bashrc"
+    log "   You may need: echo 'export PATH=\$PATH:/usr/local/bin' >> /home/$TAC_USER/.bashrc"
+fi
+
 # ---- Build the dashboard client (optional; warn on failure) ----
 if [[ -d "$TAC_HOME/dashboard/client" ]]; then
     log "Installing dashboard client dependencies..."
@@ -129,6 +181,8 @@ log "Installation complete."
 log ""
 log "Next steps:"
 log "  1. Edit $TAC_HOME/config/identity.env  — add GITHUB_PAT + ANTHROPIC_API_KEY"
+log "     (No 'claude login' needed — tac-master runs Claude Code fully headless"
+log "      using ANTHROPIC_API_KEY from this file.)"
 log "  2. Edit $TAC_HOME/config/repos.yaml    — add repos to the allowlist"
 log "  3. Run doctor:    sudo -u $TAC_USER bash -lc 'cd $TAC_HOME && uv run orchestrator/daemon.py --doctor'"
 log "  4. Start services:"

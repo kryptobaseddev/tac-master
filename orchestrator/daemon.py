@@ -128,6 +128,39 @@ def cmd_doctor(cfg: TacMasterConfig) -> int:
         if not p.exists():
             problems += 1
 
+    # Check MCP configs for the review phase
+    for mcp in (".mcp.json", "playwright-mcp-config.json"):
+        p = cfg.home / mcp
+        print(f"  mcp config {mcp}: {'✓' if p.exists() else '⚠ missing (review phase degraded)'}")
+
+    # Check Claude Code CLI is installed and callable
+    import shutil as _sh, subprocess as _sp
+    claude_bin = cfg.identity.get("CLAUDE_CODE_PATH") or _sh.which("claude")
+    if not claude_bin:
+        print("  claude code: ✗ NOT FOUND in PATH")
+        problems += 1
+    else:
+        try:
+            r = _sp.run([claude_bin, "--version"], capture_output=True,
+                        text=True, timeout=10)
+            if r.returncode == 0:
+                print(f"  claude code: ✓ {r.stdout.strip()} ({claude_bin})")
+            else:
+                print(f"  claude code: ✗ --version exited {r.returncode}: {r.stderr.strip()}")
+                problems += 1
+        except (FileNotFoundError, _sp.TimeoutExpired) as e:
+            print(f"  claude code: ✗ {e}")
+            problems += 1
+
+    # Check Playwright Chromium cache exists (for review phase)
+    import os as _os
+    home_dir = _os.path.expanduser("~")
+    pw_cache = Path(home_dir) / ".cache" / "ms-playwright"
+    if pw_cache.exists():
+        print(f"  playwright: ✓ cache at {pw_cache}")
+    else:
+        print(f"  playwright: ⚠ no cache at {pw_cache} (review phase will fail)")
+
     # Check state store + knowledge base schema
     try:
         store = StateStore(cfg.sqlite_path)
