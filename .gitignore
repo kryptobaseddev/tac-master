@@ -1,0 +1,38 @@
+# Secrets and local config
+.env
+config/identity.env
+config/*.local.yaml
+
+# Runtime state and local clones
+state/*.sqlite
+state/*.sqlite-journal
+state/*.sqlite-wal
+state/*.sqlite-shm
+repos/
+trees/
+logs/
+agents/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node/dashboard build artifacts
+node_modules/
+dist/
+.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Claude Code session state
+.claude/sessions/
