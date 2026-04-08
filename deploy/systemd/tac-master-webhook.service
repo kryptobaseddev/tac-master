@@ -1,6 +1,6 @@
 [Unit]
 Description=tac-master webhook server (multi-repo GitHub events)
-Documentation=https://github.com/OWNER/tac-master
+Documentation=https://github.com/kryptobaseddev/tac-master
 After=network-online.target tac-master.service
 Wants=network-online.target
 PartOf=tac-master.service

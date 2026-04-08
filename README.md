@@ -223,18 +223,46 @@ read-only; writes go exclusively through the Python orchestrator.
 
 ## Install
 
-See [`deploy/README.md`](deploy/README.md) for the Proxmox LXC walkthrough.
+### One-liner on a Proxmox VE host (recommended)
 
-Quick version (on any Debian 13 host):
+From your Proxmox VE host shell, as root:
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/kryptobaseddev/tac-master/main/deploy/proxmox/create-tac-master-lxc.sh)"
+```
+
+This downloads the Debian 13 "Trixie" template, creates an unprivileged
+LXC with `nesting=1,keyctl=1`, boots it, clones tac-master inside, runs
+`deploy/install.sh`, and prints the dashboard URLs. Takes ~5 minutes.
+
+Unattended mode for scripted deploys:
+
+```bash
+UNATTENDED=1 CT_ID=900 CT_MEMORY=8192 CT_DISK=64 TAC_WITH_CONTAINERS=1 \
+    bash -c "$(wget -qLO - https://raw.githubusercontent.com/kryptobaseddev/tac-master/main/deploy/proxmox/create-tac-master-lxc.sh)"
+```
+
+See [`deploy/proxmox/create-tac-master-lxc.sh`](deploy/proxmox/create-tac-master-lxc.sh)
+for all env overrides.
+
+### Manual install inside an existing Debian 13 host
+
+If you already have a Debian 13 VM or LXC:
 
 ```bash
 sudo bash deploy/install.sh
 sudoedit /srv/tac-master/config/identity.env       # add PAT + API key
 sudoedit /srv/tac-master/config/repos.yaml         # add allowlisted repos
 sudo -u krypto bash -lc 'cd /srv/tac-master && uv run orchestrator/daemon.py --doctor'
-sudo systemctl start tac-master
+sudo systemctl start tac-master tac-master-webhook tac-master-dashboard
 journalctl -u tac-master -f
 ```
+
+### Full walkthrough
+
+See [`deploy/README.md`](deploy/README.md) for the detailed Proxmox
+walkthrough, headless Claude Code notes, optional Podman runtime mode,
+and ongoing maintenance with `scripts/tac-update.sh`.
 
 ---
 

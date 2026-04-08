@@ -1,17 +1,61 @@
 # Deploying tac-master to a Proxmox LXC (Debian 13 "Trixie")
 
 This guide sets up `tac-master` as a long-running systemd service in a
-lightweight LXC container on Proxmox.
+lightweight LXC container on Proxmox. **There is a one-liner bootstrap
+script** — see §1. The rest of the guide is the manual path for when
+you want fine control.
 
-## 1. Create the LXC container
+## 1. One-liner: `create-tac-master-lxc.sh`
 
-On the Proxmox host (shell or web UI):
+From your Proxmox VE host shell, as root:
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/kryptobaseddev/tac-master/main/deploy/proxmox/create-tac-master-lxc.sh)"
+```
+
+The script is interactive by default (whiptail prompts). It:
+
+1. Preflights that you're on a Proxmox VE host
+2. Prompts for CT ID, hostname, cores, RAM, disk, storage, bridge, IP
+3. Downloads the latest Debian 13 "Trixie" template if not cached
+4. Creates an unprivileged LXC with `nesting=1,keyctl=1` features
+5. Starts the container and waits for network
+6. Installs bootstrap tools (curl, git, ca-certs)
+7. Clones `kryptobaseddev/tac-master` and runs `deploy/install.sh`
+8. Optionally installs Podman runtime mode
+9. Prints the dashboard URLs and next-step commands
+
+### Unattended mode
+
+For scripted/repeatable deploys, set env vars and `UNATTENDED=1`:
+
+```bash
+UNATTENDED=1 \
+CT_ID=900 \
+CT_HOSTNAME=tac-master \
+CT_CORES=4 \
+CT_MEMORY=8192 \
+CT_SWAP=2048 \
+CT_DISK=64 \
+CT_STORAGE=local-lvm \
+CT_BRIDGE=vmbr0 \
+CT_IP=192.168.1.50/24 \
+CT_GATEWAY=192.168.1.1 \
+TAC_WITH_CONTAINERS=1 \
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/kryptobaseddev/tac-master/main/deploy/proxmox/create-tac-master-lxc.sh)"
+```
+
+Full list of env overrides is in the script header.
+
+## 1b. Manual LXC creation (alternative)
+
+If you'd rather run the pct commands yourself:
 
 ```bash
 # Download Debian 13 template if not already cached
 pveam update
-pveam available | grep trixie
-pveam download local debian-13-standard_13.0-1_amd64.tar.zst
+pveam available --section system | grep debian-13
+pveam download local debian-13-standard_13.0-1_amd64.tar.zst   # version may differ
 
 # Create the container (adjust IDs, storage, network to match your env)
 pct create 900 \
@@ -20,10 +64,10 @@ pct create 900 \
     --cores 4 --memory 4096 --swap 2048 \
     --rootfs local-lvm:32 \
     --net0 name=eth0,bridge=vmbr0,ip=dhcp \
-    --features nesting=1 \
+    --features nesting=1,keyctl=1 \
     --unprivileged 1 \
     --onboot 1 \
-    --password
+    --tags "tac-master;agent;debian-13"
 
 pct start 900
 pct enter 900
@@ -45,11 +89,11 @@ Inside the container:
 apt-get update && apt-get install -y curl git
 
 # Option A: one-liner (after pushing this repo to GitHub)
-curl -fsSL https://raw.githubusercontent.com/OWNER/tac-master/main/deploy/install.sh \
-    | REPO_URL=https://github.com/OWNER/tac-master.git bash
+curl -fsSL https://raw.githubusercontent.com/kryptobaseddev/tac-master/main/deploy/install.sh \
+    | REPO_URL=https://github.com/kryptobaseddev/tac-master.git bash
 
 # Option B: clone and run locally
-git clone https://github.com/OWNER/tac-master.git /tmp/tac-master
+git clone https://github.com/kryptobaseddev/tac-master.git /tmp/tac-master
 bash /tmp/tac-master/deploy/install.sh
 ```
 

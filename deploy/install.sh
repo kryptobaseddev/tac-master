@@ -3,7 +3,7 @@
 #
 # Run as root inside the LXC container. Idempotent: re-running is safe.
 #
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/tac-master/main/deploy/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/kryptobaseddev/tac-master/main/deploy/install.sh | bash
 # or
 #   cd /path/to/tac-master && sudo bash deploy/install.sh
 
@@ -11,7 +11,7 @@ set -euo pipefail
 
 TAC_USER="${TAC_USER:-krypto}"
 TAC_HOME="${TAC_HOME:-/srv/tac-master}"
-REPO_URL="${REPO_URL:-https://github.com/OWNER/tac-master.git}"
+REPO_URL="${REPO_URL:-https://github.com/kryptobaseddev/tac-master.git}"
 BRANCH="${BRANCH:-main}"
 
 log() { printf '\033[1;34m[tac-master]\033[0m %s\n' "$*"; }

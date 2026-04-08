@@ -1,6 +1,6 @@
 [Unit]
 Description=tac-master dashboard (Bun server + WebSocket)
-Documentation=https://github.com/OWNER/tac-master
+Documentation=https://github.com/kryptobaseddev/tac-master
 After=network-online.target
 Wants=network-online.target
 
