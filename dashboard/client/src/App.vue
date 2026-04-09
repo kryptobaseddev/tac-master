@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, onMounted } from "vue";
 import { useOrchestratorStore } from "./stores/orchestratorStore";
 
 // Layout shell
@@ -21,6 +21,9 @@ import LiveExecutionPanel from "./components/LiveExecutionPanel.vue";
 // Sidebar — CLEO task tree
 import EpicTaskTree from "./components/command-center/EpicTaskTree.vue";
 
+// System Logs viewer
+import SystemLogs from "./components/SystemLogs.vue";
+
 // Legacy pages (repos, config)
 import RepoBoard from "./components/RepoBoard.vue";
 import ConfigPage from "./components/ConfigPage.vue";
@@ -29,7 +32,7 @@ import ConfigPage from "./components/ConfigPage.vue";
 const store = useOrchestratorStore();
 
 // ── Tab routing ───────────────────────────────────────────────────
-type Tab = "dashboard" | "repos" | "config";
+type Tab = "dashboard" | "repos" | "config" | "logs";
 const activeTab = ref<Tab>("dashboard");
 
 // ── Repo selection ────────────────────────────────────────────────
@@ -88,13 +91,14 @@ onMounted(() => {
       />
     </template>
 
-    <!-- ── Left sidebar: repo list + CLEO task tree ────────── -->
+    <!-- ── Left sidebar: repo metrics + CLEO task tree ────────── -->
     <template #sidebar>
       <RepoSidebar
         :selected-repo-url="currentRepoUrl"
         :active-tab="activeTab"
         @select-repo="handleRepoSelect"
         @navigate="activeTab = ($event as Tab)"
+        @open-logs="activeTab = 'logs'"
       />
       <EpicTaskTree />
     </template>
@@ -107,6 +111,12 @@ onMounted(() => {
         <PipelineFlow />
         <IssueDetails />
       </template>
+
+      <!-- System logs page -->
+      <SystemLogs
+        v-else-if="activeTab === 'logs'"
+        class="cc-page"
+      />
 
       <!-- Repos page -->
       <RepoBoard

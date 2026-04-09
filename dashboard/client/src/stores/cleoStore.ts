@@ -40,6 +40,18 @@ export interface TaskSummary {
   parent_id: string | null;
   labels: string[];
   acceptance: string[];
+  children_count?: number;
+  children_done?: number;
+}
+
+export interface TaskDetail extends TaskSummary {
+  description: string | null;
+  notes: string[];
+  files: string[];
+  depends: string[];
+  children: { id: string; title: string; status: string }[];
+  github_url: string | null;
+  assignee: string | null;
 }
 
 export const useCleoStore = defineStore("cleo", () => {
@@ -50,6 +62,8 @@ export const useCleoStore = defineStore("cleo", () => {
   const error = ref<string | null>(null);
   const dbPath = ref<string | null>(null);
   const lastFetched = ref<Date | null>(null);
+  const activeModal = ref<TaskDetail | null>(null);
+  const modalLoading = ref(false);
 
   let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -104,6 +118,26 @@ export const useCleoStore = defineStore("cleo", () => {
     }
   }
 
+  async function openTaskModal(taskId: string): Promise<void> {
+    modalLoading.value = true;
+    activeModal.value = null;
+    try {
+      const resp = await fetch(`/api/cleo/task/${encodeURIComponent(taskId)}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = (await resp.json()) as TaskDetail;
+      activeModal.value = data;
+    } catch (e: unknown) {
+      console.error("[cleoStore] openTaskModal error:", e);
+    } finally {
+      modalLoading.value = false;
+    }
+  }
+
+  function closeModal(): void {
+    activeModal.value = null;
+    modalLoading.value = false;
+  }
+
   function startPolling(intervalMs = 30_000): void {
     stopPolling();
     _pollTimer = setInterval(() => {
@@ -134,9 +168,13 @@ export const useCleoStore = defineStore("cleo", () => {
     lastFetched,
     selectedEpic,
     activeEpicId,
+    activeModal,
+    modalLoading,
     fetchEpics,
     fetchTasks,
     selectEpic,
+    openTaskModal,
+    closeModal,
     startPolling,
     stopPolling,
     initialize,

@@ -41,6 +41,12 @@
             <span class="ett-priority-badge" :class="`ett-priority-${epic.priority}`">
               {{ epic.priority.toUpperCase().slice(0, 4) }}
             </span>
+            <!-- Epic info icon: click to open modal without toggling expand -->
+            <span
+              class="ett-info-btn"
+              title="View epic details"
+              @click.stop="store.openTaskModal(epic.id)"
+            >&#9432;</span>
           </div>
           <!-- Progress bar -->
           <div class="ett-progress-row">
@@ -69,24 +75,44 @@
             :key="task.id"
             class="ett-task-row"
             :class="`ett-task-${normaliseStatus(task.status)}`"
-            :title="`${task.id}: ${task.title}`"
+            :title="`${task.id}: ${task.title} — click for details`"
+            @click="store.openTaskModal(task.id)"
           >
             <span class="ett-task-icon" :class="`ett-icon-${normaliseStatus(task.status)}`">
               {{ statusIcon(task.status) }}
             </span>
             <span class="ett-task-id">{{ task.id }}</span>
             <span class="ett-task-title">{{ task.title }}</span>
+            <!-- Subtask progress bar if task has children -->
+            <span
+              v-if="task.children_count && task.children_count > 0"
+              class="ett-subtask-progress"
+              :title="`${task.children_done}/${task.children_count} subtasks done`"
+            >
+              <span class="ett-subtask-bar">
+                <span
+                  class="ett-subtask-fill"
+                  :class="subFillClass(task.children_done ?? 0, task.children_count)"
+                  :style="{ width: `${Math.round(((task.children_done ?? 0) / task.children_count) * 100)}%` }"
+                ></span>
+              </span>
+              <span class="ett-subtask-label">{{ task.children_done }}/{{ task.children_count }}</span>
+            </span>
             <span v-if="task.size" class="ett-size-badge">{{ task.size }}</span>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Task detail modal (Teleport to body is inside the component) -->
+    <TaskDetailModal />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { useCleoStore, type EpicSummary } from "../../stores/cleoStore";
+import TaskDetailModal from "./TaskDetailModal.vue";
 
 const store = useCleoStore();
 const expandedEpics = ref<Set<string>>(new Set());
@@ -124,6 +150,15 @@ function progressFillClass(epic: EpicSummary): string {
   if (epic.pct >= 75) return "ett-fill-high";
   if (epic.pct >= 40) return "ett-fill-mid";
   return "ett-fill-low";
+}
+
+function subFillClass(done: number, total: number): string {
+  if (!total) return "ett-subfill-low";
+  const pct = (done / total) * 100;
+  if (pct >= 100) return "ett-subfill-done";
+  if (pct >= 60) return "ett-subfill-high";
+  if (pct >= 30) return "ett-subfill-mid";
+  return "ett-subfill-low";
 }
 
 function relativeTime(d: Date): string {
@@ -343,13 +378,14 @@ onUnmounted(() => { store.stopPolling(); });
 
 .ett-task-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 5px;
   padding: 4px 14px;
   border-bottom: 1px solid #161b22;
   transition: background 0.1s;
+  cursor: pointer;
 }
-.ett-task-row:hover { background: #161b22; }
+.ett-task-row:hover { background: #1a1e24; }
 .ett-task-row:last-child { border-bottom: none; }
 
 .ett-task-done   { opacity: 0.55; }
@@ -388,6 +424,50 @@ onUnmounted(() => { store.stopPolling(); });
   background: #21262d;
   color: #8b949e;
   text-transform: uppercase;
+}
+
+/* Info button on epic header */
+.ett-info-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #484f58;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 2px;
+  transition: color 0.15s;
+}
+.ett-info-btn:hover { color: #58a6ff; }
+
+/* Subtask progress bar inline in task rows */
+.ett-subtask-progress {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.ett-subtask-bar {
+  display: inline-block;
+  width: 32px;
+  height: 3px;
+  background: #21262d;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.ett-subtask-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.ett-subfill-done { background: #3fb950; }
+.ett-subfill-high { background: #3fb950; }
+.ett-subfill-mid  { background: #d29922; }
+.ett-subfill-low  { background: #484f58; }
+.ett-subtask-label {
+  font-size: 9px;
+  color: #484f58;
+  white-space: nowrap;
 }
 
 @keyframes pulse {

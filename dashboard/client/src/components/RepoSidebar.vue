@@ -1,30 +1,32 @@
 <script setup lang="ts">
 /**
- * RepoSidebar — Left sidebar displaying the repo list and nav links.
+ * RepoSidebar — Left sidebar showing TAC-MASTER metrics for the selected repo.
  *
- * Data sourced from the orchestrator store (populated from /api/repos via WS).
- * Each repo row shows:
- *   • Status dot: green = has active runs, red = has failed runs, gray = idle
- *   • Repo slug
- *   • Failed count badge (if > 0)
+ * Displays aggregate task counts from CLEO (total / in-progress / completed /
+ * failed+blocked / pending), escalation items (blocked or critical+not-done
+ * tasks), and quick-links to System Logs and Docs.
  *
- * Bottom links: ACTIVE_PIPELINES, SYSTEM_LOGS, DOCS
+ * Data pulled from:
+ *   /api/cleo/stats   — aggregate counts across all epics
+ *   /api/cleo/epics   — used to derive escalation items
+ *
+ * Auto-refreshes every 30 seconds.
  *
  * Props:
- *   selectedRepoUrl — URL of the currently selected repo
- *   activeTab       — current app tab (used to highlight bottom nav links)
+ *   selectedRepoUrl — URL of the currently selected repo (passed through)
+ *   activeTab       — current app tab
  *
  * Emits:
- *   select-repo  — { url: string } when a repo row is clicked
+ *   select-repo  — forwarded repo selection
  *   navigate     — tab string when a bottom link is clicked
+ *   open-logs    — when System Logs link is clicked
  *
- * @task T037
- * @epic T036
+ * @task T043
+ * @epic T042
  */
 
-import { computed } from "vue";
-import { useOrchestratorStore } from "../stores/orchestratorStore";
-import type { RepoStatus } from "../types";
+import { ref, onMounted, onUnmounted } from "vue";
+import type { EpicSummary, TaskSummary } from "../stores/cleoStore";
 
 const props = defineProps<{
   selectedRepoUrl: string;
@@ -34,104 +36,201 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "select-repo", url: string): void;
   (e: "navigate", tab: string): void;
+  (e: "open-logs"): void;
 }>();
 
-const store = useOrchestratorStore();
-const repos = computed(() => store.repos);
+// ── Stats ─────────────────────────────────────────────────────────
 
-// ── Status helpers ────────────────────────────────────────────────
-
-type DotClass = "rs-dot--green" | "rs-dot--red" | "rs-dot--gray";
-
-function repoDotClass(repo: RepoStatus): DotClass {
-  if (repo.active_runs > 0) return "rs-dot--green";
-  if (repo.failed_today > 0) return "rs-dot--red";
-  return "rs-dot--gray";
+interface CleoStats {
+  total: number;
+  done: number;
+  active: number;
+  pending: number;
+  blocked: number;
 }
 
-function repoStatus(repo: RepoStatus): string {
-  if (repo.active_runs > 0) return `${repo.active_runs} active`;
-  if (repo.failed_today > 0) return `${repo.failed_today} failed today`;
-  return "idle";
+const stats = ref<CleoStats>({ total: 0, done: 0, active: 0, pending: 0, blocked: 0 });
+const loading = ref(false);
+const error = ref<string | null>(null);
+
+// ── Escalations ────────────────────────────────────────────────────
+
+interface Escalation {
+  id: string;
+  title: string;
+  priority: string;
+  status: string;
 }
 
-function repoLabel(repo: RepoStatus): string {
-  return repo.slug ?? repo.url.replace("https://github.com/", "").replace(/\.git$/, "");
+const escalations = ref<Escalation[]>([]);
+
+// ── Fetch ──────────────────────────────────────────────────────────
+
+async function fetchStats(): Promise<void> {
+  try {
+    const resp = await fetch("/api/cleo/stats");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = (await resp.json()) as CleoStats & { error?: string };
+    if (data.error) {
+      error.value = data.error;
+      return;
+    }
+    stats.value = {
+      total:   data.total   ?? 0,
+      done:    data.done    ?? 0,
+      active:  data.active  ?? 0,
+      pending: data.pending ?? 0,
+      blocked: data.blocked ?? 0,
+    };
+    error.value = null;
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
 }
 
-// ── Bottom nav links ──────────────────────────────────────────────
-const navLinks = [
-  { id: "pipelines", label: "ACTIVE_PIPELINES", tab: "dashboard" },
-  { id: "logs",      label: "SYSTEM_LOGS",      tab: "dashboard" },
-  { id: "config",    label: "DOCS",             tab: "config"    },
-] as const;
+async function fetchEscalations(): Promise<void> {
+  try {
+    const resp = await fetch("/api/cleo/epics");
+    if (!resp.ok) return;
+    const data = (await resp.json()) as { epics?: EpicSummary[] };
+    const epics = data.epics ?? [];
+
+    // Fetch all tasks under each epic and filter for escalations
+    const escalationList: Escalation[] = [];
+    for (const epic of epics) {
+      if (epic.progress.failed > 0 || epic.progress.active > 0) {
+        const childResp = await fetch(`/api/cleo/tasks?parent=${encodeURIComponent(epic.id)}`);
+        if (!childResp.ok) continue;
+        const childData = (await childResp.json()) as { tasks?: TaskSummary[] };
+        const tasks = childData.tasks ?? [];
+        for (const t of tasks) {
+          const s = t.status.toLowerCase();
+          const isBlocked = s === "blocked" || s === "failed";
+          const isCriticalNotDone = t.priority === "critical" && s !== "done" && s !== "completed";
+          if (isBlocked || isCriticalNotDone) {
+            escalationList.push({
+              id: t.id,
+              title: t.title,
+              priority: t.priority,
+              status: t.status,
+            });
+          }
+        }
+      }
+    }
+    escalations.value = escalationList.slice(0, 5); // cap at 5 items
+  } catch {
+    // non-fatal — escalations can be missing
+  }
+}
+
+async function refresh(): Promise<void> {
+  loading.value = true;
+  await Promise.all([fetchStats(), fetchEscalations()]);
+  loading.value = false;
+}
+
+// ── Priority badge colours ─────────────────────────────────────────
+
+function priorityClass(priority: string): string {
+  switch (priority.toLowerCase()) {
+    case "critical": return "badge--red";
+    case "high":     return "badge--orange";
+    case "medium":   return "badge--yellow";
+    default:         return "badge--gray";
+  }
+}
+
+// ── Lifecycle ──────────────────────────────────────────────────────
+
+let _pollTimer: ReturnType<typeof setInterval> | null = null;
+
+onMounted(() => {
+  refresh();
+  _pollTimer = setInterval(refresh, 30_000);
+});
+
+onUnmounted(() => {
+  if (_pollTimer !== null) clearInterval(_pollTimer);
+});
 </script>
 
 <template>
   <div class="rs">
-    <!-- Section header -->
+    <!-- ── Section header ─────────────────────────────────────── -->
     <div class="rs__section-header">
-      <span class="rs__section-label">REPOSITORIES</span>
-      <span class="rs__count">{{ repos.length }}</span>
+      <span class="rs__section-label">TAC-MASTER METRICS</span>
+      <span
+        v-if="loading"
+        class="rs__spinner"
+        title="Refreshing…"
+      >⟳</span>
     </div>
 
-    <!-- Repo list -->
-    <ul class="rs__repo-list" role="listbox">
-      <li
-        v-for="repo in repos"
-        :key="repo.url"
-        class="rs__repo-item"
-        :class="{ 'rs__repo-item--selected': selectedRepoUrl === repo.url }"
-        role="option"
-        :aria-selected="selectedRepoUrl === repo.url"
-        :title="`${repoLabel(repo)} — ${repoStatus(repo)}`"
-        @click="emit('select-repo', repo.url)"
-      >
-        <!-- Status dot -->
-        <span class="rs-dot" :class="repoDotClass(repo)" />
+    <!-- ── Error state ───────────────────────────────────────── -->
+    <div v-if="error" class="rs__error">
+      <span class="rs__error-text">{{ error }}</span>
+    </div>
 
-        <!-- Slug -->
-        <span class="rs__repo-slug">{{ repoLabel(repo) }}</span>
+    <!-- ── Metrics table ─────────────────────────────────────── -->
+    <div class="rs__metrics">
+      <div class="rs__metric-row">
+        <span class="rs__metric-label">Total Tasks</span>
+        <span class="rs__metric-value">{{ stats.total }}</span>
+      </div>
+      <div class="rs__metric-row">
+        <span class="rs__metric-label">In Progress</span>
+        <span class="rs__metric-value rs__metric-value--active">{{ stats.active }}</span>
+      </div>
+      <div class="rs__metric-row">
+        <span class="rs__metric-label">Completed</span>
+        <span class="rs__metric-value rs__metric-value--done">{{ stats.done }}</span>
+      </div>
+      <div class="rs__metric-row">
+        <span class="rs__metric-label">Failed/Blocked</span>
+        <span class="rs__metric-value rs__metric-value--failed">{{ stats.blocked }}</span>
+      </div>
+      <div class="rs__metric-row">
+        <span class="rs__metric-label">Pending</span>
+        <span class="rs__metric-value rs__metric-value--pending">{{ stats.pending }}</span>
+      </div>
+    </div>
 
-        <!-- Failed badge -->
-        <span
-          v-if="repo.failed_today > 0"
-          class="rs__badge rs__badge--red"
-          :title="`${repo.failed_today} failed today`"
-        >
-          {{ repo.failed_today }}
-        </span>
-
-        <!-- Active badge -->
-        <span
-          v-else-if="repo.active_runs > 0"
-          class="rs__badge rs__badge--green"
-          :title="`${repo.active_runs} active`"
-        >
-          {{ repo.active_runs }}
-        </span>
-      </li>
-
-      <!-- Empty state -->
-      <li v-if="repos.length === 0" class="rs__empty">
-        <span class="rs__empty-text">NO_REPOS</span>
-      </li>
-    </ul>
-
-    <!-- Divider -->
+    <!-- ── Divider ───────────────────────────────────────────── -->
     <div class="rs__divider" />
 
-    <!-- Bottom nav links -->
+    <!-- ── Escalations ───────────────────────────────────────── -->
+    <div class="rs__sub-header">ESCALATIONS</div>
+    <div class="rs__escalations">
+      <div
+        v-for="item in escalations"
+        :key="item.id"
+        class="rs__esc-item"
+        :title="`${item.id}: ${item.title} [${item.status}]`"
+      >
+        <span class="rs__esc-id">{{ item.id }}</span>
+        <span class="rs__esc-title">{{ item.title }}</span>
+        <span class="rs__badge" :class="priorityClass(item.priority)">
+          {{ item.priority.toUpperCase().slice(0, 3) }}
+        </span>
+      </div>
+      <div v-if="escalations.length === 0 && !loading" class="rs__esc-empty">
+        <span>NONE</span>
+      </div>
+    </div>
+
+    <!-- ── Divider ───────────────────────────────────────────── -->
+    <div class="rs__divider" />
+
+    <!-- ── Quick links ───────────────────────────────────────── -->
+    <div class="rs__sub-header">QUICK LINKS</div>
     <nav class="rs__nav">
       <button
-        v-for="link in navLinks"
-        :key="link.id"
         class="rs__nav-link"
-        :class="{ 'rs__nav-link--active': activeTab === link.tab && link.id !== 'logs' }"
-        @click="emit('navigate', link.tab)"
+        @click="emit('open-logs')"
       >
         <span class="rs__nav-link-arrow">›</span>
-        {{ link.label }}
+        SYSTEM_LOGS
       </button>
     </nav>
   </div>
@@ -164,129 +263,134 @@ const navLinks = [
   color: var(--cc-text-muted, #666);
 }
 
-.rs__count {
-  font-size: 9px;
+.rs__spinner {
+  font-size: 10px;
   color: var(--cc-cyan, #00ffcc);
-  font-weight: 700;
+  animation: spin 1s linear infinite;
 }
 
-/* ── Repo list ───────────────────────────────────────────────── */
-.rs__repo-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  flex: 1;
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Error ───────────────────────────────────────────────────── */
+.rs__error {
+  padding: 6px 12px;
+}
+.rs__error-text {
+  font-size: 9px;
+  color: var(--cc-red, #ff4466);
+  word-break: break-all;
+}
+
+/* ── Metrics ─────────────────────────────────────────────────── */
+.rs__metrics {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  flex-shrink: 0;
+}
+
+.rs__metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 12px;
+}
+
+.rs__metric-label {
+  font-size: 10px;
+  color: var(--cc-text-muted, #666);
+  letter-spacing: 0.04em;
+}
+
+.rs__metric-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--cc-text, #e0e0e0);
+  min-width: 24px;
+  text-align: right;
+}
+
+.rs__metric-value--active  { color: var(--cc-cyan,  #00ffcc); }
+.rs__metric-value--done    { color: var(--cc-green, #00ff66); }
+.rs__metric-value--failed  { color: var(--cc-red,   #ff4466); }
+.rs__metric-value--pending { color: var(--cc-text-muted, #666); }
+
+/* ── Sub-header ──────────────────────────────────────────────── */
+.rs__sub-header {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--cc-text-muted, #666);
+  padding: 6px 12px 4px;
+  flex-shrink: 0;
+}
+
+/* ── Escalations ─────────────────────────────────────────────── */
+.rs__escalations {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0 4px;
+  flex-shrink: 0;
+  max-height: 120px;
   overflow-y: auto;
-  overflow-x: hidden;
-  /* Custom scrollbar */
   scrollbar-width: thin;
   scrollbar-color: var(--cc-border-mid, #222) var(--cc-bg, #0a0a0a);
 }
 
-.rs__repo-list::-webkit-scrollbar { width: 3px; }
-.rs__repo-list::-webkit-scrollbar-track { background: var(--cc-bg, #0a0a0a); }
-.rs__repo-list::-webkit-scrollbar-thumb { background: var(--cc-border-mid, #222); border-radius: 2px; }
-
-.rs__repo-item {
+.rs__esc-item {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
-  cursor: pointer;
-  border-left: 2px solid transparent;
-  transition: background var(--cc-transition, 0.15s ease),
-              border-color var(--cc-transition, 0.15s ease);
-  min-height: 32px;
+  gap: 5px;
+  padding: 4px 12px;
+  min-height: 24px;
   overflow: hidden;
 }
 
-.rs__repo-item:hover {
-  background: var(--cc-surface-raised, #161616);
-  border-left-color: var(--cc-border-hi, #2a2a2a);
-}
-
-.rs__repo-item--selected {
-  background: var(--cc-cyan-dim, rgba(0, 255, 204, 0.08));
-  border-left-color: var(--cc-cyan, #00ffcc);
-}
-
-.rs__repo-item--selected .rs__repo-slug {
+.rs__esc-id {
+  font-size: 8px;
   color: var(--cc-cyan, #00ffcc);
-}
-
-/* Status dot */
-.rs-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
   flex-shrink: 0;
+  letter-spacing: 0.04em;
 }
 
-.rs-dot--green {
-  background: var(--cc-green, #00ff66);
-  box-shadow: 0 0 6px rgba(0, 255, 102, 0.5);
-}
-
-.rs-dot--red {
-  background: var(--cc-red, #ff4466);
-  box-shadow: 0 0 6px rgba(255, 68, 102, 0.5);
-}
-
-.rs-dot--gray {
-  background: var(--cc-text-dim, #444);
-}
-
-/* Slug text */
-.rs__repo-slug {
-  font-size: 10px;
-  letter-spacing: 0.03em;
+.rs__esc-title {
+  font-size: 9px;
   color: var(--cc-text, #e0e0e0);
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
 }
 
-/* Count badges */
+.rs__esc-empty {
+  padding: 4px 12px;
+  font-size: 9px;
+  color: var(--cc-text-dim, #444);
+  letter-spacing: 0.08em;
+}
+
+/* ── Priority badges ─────────────────────────────────────────── */
 .rs__badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 14px;
-  padding: 0 4px;
+  min-width: 24px;
+  height: 13px;
+  padding: 0 3px;
   border-radius: 2px;
-  font-size: 8px;
+  font-size: 7px;
   font-weight: 700;
+  letter-spacing: 0.04em;
   flex-shrink: 0;
 }
 
-.rs__badge--green {
-  background: rgba(0, 255, 102, 0.15);
-  color: var(--cc-green, #00ff66);
-  border: 1px solid rgba(0, 255, 102, 0.3);
-}
-
-.rs__badge--red {
-  background: rgba(255, 68, 102, 0.15);
-  color: var(--cc-red, #ff4466);
-  border: 1px solid rgba(255, 68, 102, 0.3);
-}
-
-/* Empty state */
-.rs__empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px 12px;
-}
-
-.rs__empty-text {
-  font-size: 9px;
-  letter-spacing: 0.1em;
-  color: var(--cc-text-dim, #444);
-}
+.badge--red    { background: rgba(255, 68,102,0.15); color: var(--cc-red,   #ff4466); border: 1px solid rgba(255,68,102,0.3); }
+.badge--orange { background: rgba(255,165,  0,0.15); color: #ffa500;                  border: 1px solid rgba(255,165,0,0.3); }
+.badge--yellow { background: rgba(255,204,  0,0.15); color: #ffcc00;                  border: 1px solid rgba(255,204,0,0.3); }
+.badge--gray   { background: rgba(100,100,100,0.15); color: var(--cc-text-muted,#666);border: 1px solid rgba(100,100,100,0.3); }
 
 /* ── Divider ─────────────────────────────────────────────────── */
 .rs__divider {
@@ -324,10 +428,6 @@ const navLinks = [
 .rs__nav-link:hover {
   color: var(--cc-text, #e0e0e0);
   background: var(--cc-surface-raised, #161616);
-}
-
-.rs__nav-link--active {
-  color: var(--cc-cyan, #00ffcc);
 }
 
 .rs__nav-link-arrow {

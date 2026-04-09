@@ -72,7 +72,7 @@ function onRepoChange(e: Event) {
     <!-- ── Left: branding ─────────────────────────────── -->
     <div class="hb__left">
       <span class="hb__brand">
-        <span class="hb__brand-accent">COMMAND</span>_CENTER
+        <span class="hb__brand-accent">TAC</span>-MASTER
       </span>
       <span
         class="cc-dot"

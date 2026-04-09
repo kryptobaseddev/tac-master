@@ -40,7 +40,8 @@ import {
   type RepoEntry,
 } from "./config";
 import type { HookEvent, WsMessage } from "./types";
-import { getEpics, getTasksByParent, getTaskById } from "./cleo-api";
+import { getEpics, getTasksByParent, getTaskById, getCleoStats } from "./cleo-api";
+import { readFile } from "node:fs/promises";
 import { parseStreamFile, resolveStreamPath, listStreamPhases } from "./stream-parser";
 
 const PORT = Number(process.env.PORT ?? 4000);
@@ -492,6 +493,60 @@ const server = Bun.serve({
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
       }
+    }
+
+    // GET /api/cleo/stats — aggregate task counts across all epics (T043)
+    if (url.pathname === "/api/cleo/stats" && req.method === "GET") {
+      try {
+        return json(getCleoStats());
+      } catch (e: any) {
+        return json({ total: 0, done: 0, active: 0, pending: 0, blocked: 0, error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // GET /api/logs/daemon — last 100 lines of tac-master daemon log (T043)
+    if (url.pathname === "/api/logs/daemon" && req.method === "GET") {
+      const limit = Number(url.searchParams.get("limit") ?? 100);
+
+      // Try journalctl first (available on systemd LXC), then fall back to file
+      try {
+        const journalProc = Bun.spawnSync(
+          ["journalctl", "-u", "tac-master", "-n", String(limit), "--no-pager", "--output=short-iso"],
+          { timeout: 5000 },
+        );
+        if (journalProc.exitCode === 0) {
+          const stdout = new TextDecoder().decode(journalProc.stdout);
+          if (stdout.trim()) {
+            const lines = stdout.trim().split("\n").filter(Boolean);
+            return json({ lines, source: "journalctl -u tac-master" });
+          }
+        }
+      } catch {
+        // journalctl not available — fall through to file
+      }
+
+      // Fallback: read daemon.stdout.log file
+      const LOG_CANDIDATES = [
+        "/srv/tac-master/logs/daemon.stdout.log",
+        "/var/log/tac-master/daemon.stdout.log",
+      ];
+
+      for (const logPath of LOG_CANDIDATES) {
+        try {
+          const content = await readFile(logPath, "utf-8");
+          const allLines = content.split("\n");
+          const lines = allLines.slice(-limit).filter(Boolean);
+          return json({ lines, source: logPath });
+        } catch {
+          // try next candidate
+        }
+      }
+
+      return json({
+        lines: [],
+        source: "",
+        error: "No log source available (journalctl failed and no log file found)",
+      });
     }
 
     // --- Static client (Vue SPA) ---
