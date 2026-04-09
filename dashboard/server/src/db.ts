@@ -274,6 +274,123 @@ export function getActiveAndRecentRuns(limit = 50): RunSummary[] {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Phase breakdown for a specific run (T038)
+// ---------------------------------------------------------------------------
+
+export interface PhaseEntry {
+  phase: string;
+  status: string;
+  started?: number | null;
+  ended?: number | null;
+}
+
+/**
+ * Returns the phases touched by a run derived from two sources:
+ * 1. The dashboard events DB (hook_events with phase+adw_id set)
+ * 2. The tac_master runs table to determine terminal status
+ *
+ * Phase status inference:
+ *  - The last known event for each phase determines "started".
+ *  - If the run has ended (succeeded/failed/aborted) AND there are no later
+ *    phases, the last seen phase is marked as the run's terminal status.
+ *  - A phase is "active" only when it matches the most recent event overall.
+ *  - All earlier phases are "completed".
+ */
+const PITER_PHASES = [
+  "classify_iso",
+  "plan_iso",
+  "build_iso",
+  "test_iso",
+  "review_iso",
+  "document_iso",
+  "ship_iso",
+  "reflect_iso",
+];
+
+export function getRunPhases(adwId: string): PhaseEntry[] {
+  // Query dashboard events DB for phases seen for this run
+  type PhaseRow = { phase: string; first_ts: number; last_ts: number };
+  const rows = db()
+    .prepare(
+      `SELECT phase,
+              MIN(timestamp) AS first_ts,
+              MAX(timestamp) AS last_ts
+       FROM events
+       WHERE adw_id = ?
+         AND phase IS NOT NULL
+       GROUP BY phase
+       ORDER BY first_ts ASC`,
+    )
+    .all(adwId) as PhaseRow[];
+
+  if (rows.length === 0) {
+    // No events recorded yet — return all phases as pending
+    return PITER_PHASES.map((p) => ({ phase: p, status: "pending" }));
+  }
+
+  // Determine run's terminal status from tac_master DB if available
+  let runStatus = "running";
+  if (tacDb) {
+    try {
+      const run = tacDb
+        .prepare(`SELECT status FROM runs WHERE adw_id = ? LIMIT 1`)
+        .get(adwId) as { status: string } | undefined;
+      if (run) runStatus = run.status;
+    } catch {
+      // ignore
+    }
+  }
+
+  const seenPhases = rows.map((r) => r.phase);
+  const lastSeenPhase = seenPhases[seenPhases.length - 1];
+  const mostRecentTs = rows[rows.length - 1]?.last_ts ?? 0;
+
+  // Build a lookup of normalised phase names from events
+  const phaseMap = new Map<string, PhaseRow>();
+  for (const r of rows) {
+    phaseMap.set(normPhase(r.phase), r);
+  }
+
+  return PITER_PHASES.map((piterKey) => {
+    const row = phaseMap.get(piterKey);
+    if (!row) {
+      // Not yet reached
+      return { phase: piterKey, status: "pending" };
+    }
+
+    const isLast = normPhase(lastSeenPhase) === piterKey;
+    let status: string;
+
+    if (isLast) {
+      if (runStatus === "succeeded") {
+        status = "completed";
+      } else if (runStatus === "failed" || runStatus === "aborted") {
+        status = "failed";
+      } else {
+        // still running — this is the active phase if its last event is the
+        // most recent overall; otherwise treat as completed
+        status = row.last_ts === mostRecentTs ? "running" : "completed";
+      }
+    } else {
+      status = "completed";
+    }
+
+    return {
+      phase: piterKey,
+      status,
+      started: row.first_ts,
+      ended: isLast && runStatus !== "running" ? row.last_ts : null,
+    };
+  });
+}
+
+function normPhase(raw: string): string {
+  if (!raw) return raw;
+  if (raw.endsWith("_iso")) return raw;
+  return `${raw}_iso`;
+}
+
 export function getLessons(limit = 20): Array<{
   adw_id: string;
   repo_url: string;
@@ -300,4 +417,85 @@ function startOfTodayUnix(): number {
   return Math.floor(
     new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate KPI stats for /api/stats (T037 Command Center status bar)
+// ---------------------------------------------------------------------------
+
+export interface AggregateStats {
+  live_runs: number;
+  total_repos: number;
+  tokens_today: number;
+  cost_today_usd: number;
+  total_runs: number;
+}
+
+export function getAggregateStats(): AggregateStats {
+  const empty: AggregateStats = {
+    live_runs: 0,
+    total_repos: 0,
+    tokens_today: 0,
+    cost_today_usd: 0,
+    total_runs: 0,
+  };
+
+  if (!tacDb) return empty;
+
+  try {
+    const todayStart = startOfTodayUnix();
+
+    const liveRow = tacDb
+      .prepare(`SELECT COUNT(*) AS n FROM runs WHERE status IN ('pending','running')`)
+      .get() as any;
+
+    const repoRow = tacDb
+      .prepare(`SELECT COUNT(*) AS n FROM repos`)
+      .get() as any;
+
+    const runsRow = tacDb
+      .prepare(`SELECT COUNT(*) AS n FROM runs`)
+      .get() as any;
+
+    // token_ledger may not exist in older deployments — wrap in try/catch
+    let tokensRow: any = { tokens: 0 };
+    let costRow: any = { cost: 0 };
+    try {
+      tokensRow = tacDb
+        .prepare(
+          `SELECT IFNULL(SUM(input_tokens + output_tokens), 0) AS tokens
+           FROM token_ledger WHERE attributed_at >= ?`,
+        )
+        .get(todayStart) as any;
+      costRow = tacDb
+        .prepare(
+          `SELECT IFNULL(SUM(cost_usd), 0) AS cost
+           FROM token_ledger WHERE attributed_at >= ?`,
+        )
+        .get(todayStart) as any;
+    } catch {
+      // token_ledger doesn't exist yet — fall back to budget_usage
+      try {
+        tokensRow = tacDb
+          .prepare(
+            `SELECT IFNULL(SUM(tokens_used), 0) AS tokens
+             FROM budget_usage WHERE day = date('now')`,
+          )
+          .get() as any;
+      } catch {
+        // budget_usage also missing — leave zeros
+      }
+    }
+
+    return {
+      live_runs:      Number(liveRow?.n ?? 0),
+      total_repos:    Number(repoRow?.n ?? 0),
+      tokens_today:   Number(tokensRow?.tokens ?? 0),
+      cost_today_usd: Number(costRow?.cost ?? 0),
+      total_runs:     Number(runsRow?.n ?? 0),
+    };
+  } catch (e) {
+    console.error("[stats] aggregate query failed:", e);
+    return empty;
+  }
 }
