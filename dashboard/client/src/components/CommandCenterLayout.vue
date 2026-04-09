@@ -2,21 +2,23 @@
 /**
  * CommandCenterLayout — master CSS Grid shell for the Command Center redesign.
  *
- * Provides four named areas:
+ * Provides five named areas:
  *   header     — full-width top bar (HeaderBar)
- *   sidebar    — left navigation column (RepoSidebar)
- *   main       — scrollable content area (router-view or panels)
+ *   sidebar    — left navigation column (RepoSidebar + EpicTaskTree)
+ *   main       — scrollable center content area (panels)
+ *   right      — right sidebar (LiveExecutionPanel)
  *   statusbar  — full-width bottom KPI bar (StatusBar)
  *
  * Usage:
  *   <CommandCenterLayout>
  *     <template #header>   <HeaderBar  /> </template>
- *     <template #sidebar>  <RepoSidebar /> </template>
- *     <template #main>     <router-view /> </template>
+ *     <template #sidebar>  <RepoSidebar /> <EpicTaskTree /> </template>
+ *     <template #main>     <ActiveAgentsPanel /> ... </template>
+ *     <template #right>    <LiveExecutionPanel /> </template>
  *     <template #statusbar><StatusBar  /> </template>
  *   </CommandCenterLayout>
  *
- * @task T037
+ * @task T037 (updated T041 integration)
  * @epic T036
  */
 
@@ -30,7 +32,7 @@
       <slot name="header" />
     </header>
 
-    <!-- Body row: sidebar + main -->
+    <!-- Body row: sidebar + main + right -->
     <div class="cc-layout__body">
       <aside class="cc-layout__sidebar">
         <slot name="sidebar" />
@@ -39,6 +41,10 @@
       <main class="cc-layout__main">
         <slot name="main" />
       </main>
+
+      <aside class="cc-layout__right" v-if="$slots.right">
+        <slot name="right" />
+      </aside>
     </div>
 
     <!-- Status bar area -->
@@ -70,7 +76,7 @@
   min-width: 0;
 }
 
-/* The body row holds sidebar + main side by side */
+/* The body row holds sidebar + main + right side by side */
 .cc-layout__body {
   grid-row: 2;
   grid-column: 1;
@@ -86,6 +92,8 @@
   background: var(--cc-surface, #111);
   overflow-y: auto;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .cc-layout__main {
@@ -93,6 +101,17 @@
   min-width: 0;
   overflow: hidden;
   position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.cc-layout__right {
+  width: var(--cc-right-w, 320px);
+  flex-shrink: 0;
+  border-left: 1px solid var(--cc-border, #1a1a1a);
+  background: var(--cc-surface, #111);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .cc-layout__statusbar {
@@ -105,9 +124,12 @@
   min-width: 0;
 }
 
-/* ── Narrow-screen: collapse sidebar ─────────────────────────── */
+/* ── Narrow-screen: collapse sidebars ─────────────────────────── */
 @media (max-width: 768px) {
   .cc-layout__sidebar {
+    display: none;
+  }
+  .cc-layout__right {
     display: none;
   }
 }
