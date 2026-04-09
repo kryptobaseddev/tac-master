@@ -1,0 +1,169 @@
+/**
+ * Command Center — dark terminal theme.
+ *
+ * CSS custom properties used by all Command Center components.
+ * Import once from the component that mounts CommandCenterLayout,
+ * or from main.ts so it is globally available.
+ *
+ * @task T037
+ * @epic T036
+ */
+
+:root {
+  /* ── Base surfaces ─────────────────────────────────────────── */
+  --cc-bg: #0a0a0a;
+  --cc-surface: #111111;
+  --cc-surface-raised: #161616;
+  --cc-border: #1a1a1a;
+  --cc-border-mid: #222222;
+  --cc-border-hi: #2a2a2a;
+
+  /* ── Accent palette ────────────────────────────────────────── */
+  --cc-cyan: #00ffcc;
+  --cc-cyan-dim: rgba(0, 255, 204, 0.15);
+  --cc-cyan-glow: 0 0 8px rgba(0, 255, 204, 0.4);
+  --cc-green: #00ff66;
+  --cc-green-dim: rgba(0, 255, 102, 0.15);
+  --cc-green-glow: 0 0 8px rgba(0, 255, 102, 0.4);
+  --cc-red: #ff4466;
+  --cc-red-dim: rgba(255, 68, 102, 0.15);
+  --cc-amber: #ffaa00;
+  --cc-amber-dim: rgba(255, 170, 0, 0.15);
+
+  /* ── Text ──────────────────────────────────────────────────── */
+  --cc-text: #e0e0e0;
+  --cc-text-muted: #666666;
+  --cc-text-dim: #444444;
+  --cc-text-bright: #ffffff;
+
+  /* ── Typography ────────────────────────────────────────────── */
+  --cc-font: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace,
+    Menlo, Consolas, 'Courier New', monospace;
+
+  /* ── Layout dimensions ─────────────────────────────────────── */
+  --cc-header-h: 48px;
+  --cc-sidebar-w: 220px;
+  --cc-statusbar-h: 32px;
+
+  /* ── Transitions ───────────────────────────────────────────── */
+  --cc-transition: 0.15s ease;
+}
+
+/* ── Shared utility classes used across CC components ─────────── */
+
+.cc-label {
+  font-family: var(--cc-font);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cc-text-muted);
+}
+
+.cc-value {
+  font-family: var(--cc-font);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--cc-text);
+}
+
+.cc-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-family: var(--cc-font);
+}
+
+.cc-badge-cyan {
+  background: var(--cc-cyan-dim);
+  color: var(--cc-cyan);
+  border: 1px solid rgba(0, 255, 204, 0.25);
+}
+
+.cc-badge-green {
+  background: var(--cc-green-dim);
+  color: var(--cc-green);
+  border: 1px solid rgba(0, 255, 102, 0.25);
+}
+
+.cc-badge-red {
+  background: var(--cc-red-dim);
+  color: var(--cc-red);
+  border: 1px solid rgba(255, 68, 102, 0.25);
+}
+
+/* ── Status dots ───────────────────────────────────────────────── */
+
+.cc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cc-dot-green {
+  background: var(--cc-green);
+  box-shadow: var(--cc-green-glow);
+}
+
+.cc-dot-cyan {
+  background: var(--cc-cyan);
+  box-shadow: var(--cc-cyan-glow);
+}
+
+.cc-dot-gray {
+  background: var(--cc-text-dim);
+}
+
+.cc-dot-red {
+  background: var(--cc-red);
+  box-shadow: 0 0 6px rgba(255, 68, 102, 0.5);
+}
+
+/* ── Scrollbar override for CC panels ──────────────────────────── */
+
+.cc-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.cc-scroll::-webkit-scrollbar-track {
+  background: var(--cc-bg);
+}
+
+.cc-scroll::-webkit-scrollbar-thumb {
+  background: var(--cc-border-mid);
+  border-radius: 2px;
+}
+
+.cc-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--cc-border-hi);
+}
+
+/* ── Pulse animation for live indicators ───────────────────────── */
+
+@keyframes cc-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+.cc-pulse {
+  animation: cc-pulse 1.8s ease-in-out infinite;
+}
+
+/* ── Glow text ─────────────────────────────────────────────────── */
+
+.cc-glow-cyan {
+  color: var(--cc-cyan);
+  text-shadow: 0 0 12px rgba(0, 255, 204, 0.5);
+}
+
+.cc-glow-green {
+  color: var(--cc-green);
+  text-shadow: 0 0 12px rgba(0, 255, 102, 0.5);
+}

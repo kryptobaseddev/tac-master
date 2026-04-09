@@ -19,6 +19,7 @@ import {
   getRepoStatuses,
   getActiveAndRecentRuns,
   getLessons,
+  getRunPhases,
 } from "./db";
 import {
   getReposConfig,
@@ -208,6 +209,11 @@ const server = Bun.serve({
     if (url.pathname === "/api/lessons" && req.method === "GET") {
       const limit = Number(url.searchParams.get("limit") ?? 20);
       return json({ lessons: getLessons(limit) });
+    }
+
+    // --- Aggregate KPI stats (T037 Command Center status bar) ---
+    if (url.pathname === "/api/stats" && req.method === "GET") {
+      return json(getAggregateStats());
     }
 
     // ============================================================
