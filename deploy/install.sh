@@ -139,7 +139,7 @@ fi
 if ! id "$TAC_USER" >/dev/null 2>&1; then
     log "Creating user $TAC_USER..."
     useradd --system --create-home --shell /bin/bash "$TAC_USER"
-    ok "User $TAC_USER created ($(getent passwd "$TAC_USER" | cut -d: -f6))"
+    log "User $TAC_USER created: $(getent passwd "$TAC_USER" | cut -d: -f6)"
 fi
 
 # ---- Install uv for the service user ----
