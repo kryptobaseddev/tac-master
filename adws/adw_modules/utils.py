@@ -188,34 +188,39 @@ def check_env_vars(logger: Optional[logging.Logger] = None) -> None:
 
 def get_safe_subprocess_env() -> Dict[str, str]:
     """Get filtered environment variables safe for subprocess execution.
-    
+
     Returns only the environment variables needed for ADW workflows based on
     .env.sample configuration. This prevents accidental exposure of sensitive
     credentials to subprocesses.
-    
+
+    ADW_ID and GITHUB_REPO_URL are explicitly included so that hook scripts
+    (send_event.py) running inside the claude subprocess tree can perform
+    attribution without falling back to fragile git shellout / filesystem
+    heuristics. See T011 / T003 for the root-cause analysis.
+
     Returns:
         Dictionary containing only required environment variables
     """
     safe_env_vars = {
         # Anthropic Configuration (required)
         "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
-        
+
         # GitHub Configuration (optional)
         # GITHUB_PAT is optional - if not set, will use default gh auth
         "GITHUB_PAT": os.getenv("GITHUB_PAT"),
-        
+
         # Claude Code Configuration
         "CLAUDE_CODE_PATH": os.getenv("CLAUDE_CODE_PATH", "claude"),
         "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": os.getenv(
             "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "true"
         ),
-        
+
         # Agent Cloud Sandbox Environment (optional)
         "E2B_API_KEY": os.getenv("E2B_API_KEY"),
-        
+
         # Cloudflare tunnel token (optional)
         "CLOUDFLARED_TUNNEL_TOKEN": os.getenv("CLOUDFLARED_TUNNEL_TOKEN"),
-        
+
         # Essential system environment variables
         "HOME": os.getenv("HOME"),
         "USER": os.getenv("USER"),
@@ -224,19 +229,27 @@ def get_safe_subprocess_env() -> Dict[str, str]:
         "TERM": os.getenv("TERM"),
         "LANG": os.getenv("LANG"),
         "LC_ALL": os.getenv("LC_ALL"),
-        
+
         # Python-specific variables that subprocesses might need
         "PYTHONPATH": os.getenv("PYTHONPATH"),
         "PYTHONUNBUFFERED": "1",  # Useful for subprocess output
-        
+
         # Working directory tracking
         "PWD": os.getcwd(),
+
+        # T011 / T003 — Dashboard event attribution
+        # These vars are read by .claude/hooks/send_event.py (detect_adw_id and
+        # detect_repo_url) to populate dashboard events with non-NULL attribution.
+        # Without them the hooks must fall back to filesystem heuristics which
+        # fail when cwd is not under the worktree or when git is not in PATH.
+        "ADW_ID": os.getenv("ADW_ID"),
+        "GITHUB_REPO_URL": os.getenv("GITHUB_REPO_URL"),
     }
-    
+
     # Add GH_TOKEN as alias for GITHUB_PAT if it exists
     github_pat = os.getenv("GITHUB_PAT")
     if github_pat:
         safe_env_vars["GH_TOKEN"] = github_pat
-    
+
     # Filter out None values
     return {k: v for k, v in safe_env_vars.items() if v is not None}

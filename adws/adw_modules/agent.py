@@ -341,6 +341,14 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
     # Set up environment with only required variables
     env = get_claude_env()
 
+    # T011 / T003 — Explicit attribution injection
+    # request.adw_id is always known at this call site, so inject it directly
+    # rather than relying solely on the parent process env flowing through the
+    # allowlist. This guarantees send_event.py hooks receive ADW_ID even when
+    # the dispatcher did not export it before spawning this process.
+    if request.adw_id:
+        env["ADW_ID"] = request.adw_id
+
     try:
         # Open output file for streaming
         with open(request.output_file, "w") as output_f:
