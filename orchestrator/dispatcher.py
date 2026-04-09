@@ -252,11 +252,15 @@ class Dispatcher:
     # ------------------------------------------------------------------
     def _build_env(self, repo: RepoConfig, handle: RepoHandle) -> dict[str, str]:
         env = os.environ.copy()
+        # NOTE: identity.get(key, default) only uses `default` if the key is
+        # MISSING, not if the value is an empty string. The loader stores
+        # every expected key with os.getenv(k, "") so empty strings are
+        # common. Use `or` to fall back on empty values too.
         env.update({
             "GITHUB_REPO_URL": repo.url,
-            "GITHUB_PAT": self.cfg.identity.get("GITHUB_PAT", ""),
-            "ANTHROPIC_API_KEY": self.cfg.identity.get("ANTHROPIC_API_KEY", ""),
-            "CLAUDE_CODE_PATH": self.cfg.identity.get("CLAUDE_CODE_PATH", "claude"),
+            "GITHUB_PAT": self.cfg.identity.get("GITHUB_PAT") or "",
+            "ANTHROPIC_API_KEY": self.cfg.identity.get("ANTHROPIC_API_KEY") or "",
+            "CLAUDE_CODE_PATH": self.cfg.identity.get("CLAUDE_CODE_PATH") or "claude",
             "ADW_MODEL_SET": repo.model_set,
             "TAC_MASTER_HOME": str(self.cfg.home),
         })
