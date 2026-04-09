@@ -104,11 +104,85 @@ def extract_adw_info(text: str, temp_adw_id: str) -> ADWExtractionResult:
         return ADWExtractionResult()  # Empty result
 
 
+def _cleanup_stale_issue_specs(issue_number: int, cwd: str, logger: logging.Logger) -> None:
+    """
+    @task T009
+    @epic T001
+    @why classify_issue was returning file paths instead of slash commands, blocking PITER dispatch
+    @what Pre-classify cleanup: removes stale specs/issue-{number}-*.md files left by prior failed runs
+          so that future classify invocations start with a clean slate.
+
+    Remove any stale specs/issue-{number}-*.md files from the repo clone before classification.
+    These files are created as a side-effect of misfired feature-planning runs and can pollute
+    the working directory, causing subsequent runs to pick up wrong context.
+    Idempotent — safe to call even when no stale files exist.
+    """
+    pattern = os.path.join(cwd, f"specs/issue-{issue_number}-*.md")
+    stale_files = glob.glob(pattern)
+    for f in stale_files:
+        try:
+            os.remove(f)
+            logger.warning(f"[T009-B] Removed stale spec file before classify: {f}")
+        except OSError as e:
+            logger.warning(f"[T009-B] Could not remove stale spec file {f}: {e}")
+
+
+def _extract_classify_token(raw_output: str, logger: logging.Logger) -> str:
+    """
+    @task T009
+    @epic T001
+    @why classify_issue was returning file paths instead of slash commands, blocking PITER dispatch
+    @what Defensive parser: scans the full classify response for a standalone slash-command token
+          and extracts it even when Claude emits surrounding noise (e.g. file paths, markdown).
+
+    Extract the classification token from classify_issue output.
+    Scans for the last occurrence of /chore, /bug, /feature, /patch, or 0 using a
+    standalone-token regex so that noise (file paths, markdown, explanations) is ignored.
+    Logs a warning when the raw output contains extra content beyond the token.
+
+    Returns the matched token, or the stripped raw_output if no token is found.
+    """
+    VALID_TOKENS = ("/chore", "/bug", "/feature", "/patch", "0")
+    # Match the token as a whole word/token — not a substring of a longer path
+    pattern = re.compile(r"(?<![/\w])(/chore|/bug|/feature|/patch|(?<![/\w])0)(?![/\w])")
+    matches = pattern.findall(raw_output)
+
+    if not matches:
+        return raw_output.strip()
+
+    token = matches[-1]  # take last occurrence if multiple
+
+    # Warn if there was surrounding noise
+    stripped = raw_output.strip()
+    if stripped != token:
+        logger.warning(
+            f"[T009-C] classify_issue response contained noise around token '{token}'. "
+            f"Raw output was: {stripped!r}"
+        )
+
+    return token
+
+
 def classify_issue(
-    issue: GitHubIssue, adw_id: str, logger: logging.Logger
+    issue: GitHubIssue,
+    adw_id: str,
+    logger: logging.Logger,
+    cwd: Optional[str] = None,
 ) -> Tuple[Optional[IssueClassSlashCommand], Optional[str]]:
     """Classify GitHub issue and return appropriate slash command.
-    Returns (command, error_message) tuple."""
+    Returns (command, error_message) tuple.
+
+    @task T009
+    @epic T001
+    @why classify_issue was returning file paths instead of slash commands, blocking PITER dispatch
+    @what Orchestrates Fix A1+B+C: cleans stale specs before classify, calls the tightened
+          classify_issue.md prompt, then uses the defensive token extractor on the response.
+    """
+
+    # Fix B — remove stale specs/issue-*.md files from the clone before classification
+    # These are left behind by misfired feature-planning runs and must not pollute future runs.
+    effective_cwd = cwd or os.getcwd()
+    _cleanup_stale_issue_specs(issue.number, effective_cwd, logger)
 
     # Use the classify_issue slash command template with minimal payload
     # Only include the essential fields: number, title, body
@@ -134,17 +208,8 @@ def classify_issue(
     if not response.success:
         return None, response.output
 
-    # Extract the classification from the response
-    output = response.output.strip()
-
-    # Look for the classification pattern in the output
-    # Claude might add explanation, so we need to extract just the command
-    classification_match = re.search(r"(/chore|/bug|/feature|/patch|0)", output)
-
-    if classification_match:
-        issue_command = classification_match.group(1)
-    else:
-        issue_command = output
+    # Fix C — defensive token extraction: extract the slash command from any surrounding noise
+    issue_command = _extract_classify_token(response.output, logger)
 
     if issue_command == "0":
         return None, f"No command selected: {response.output}"
@@ -547,8 +612,8 @@ def create_or_find_branch(
     # 3. Create new branch - classify issue first
     logger.info("No existing branch found, creating new one")
 
-    # Classify the issue
-    issue_command, error = classify_issue(issue, adw_id, logger)
+    # Classify the issue (pass cwd so stale specs cleanup targets the right clone dir)
+    issue_command, error = classify_issue(issue, adw_id, logger, cwd=cwd)
     if error:
         return "", f"Failed to classify issue: {error}"
 
