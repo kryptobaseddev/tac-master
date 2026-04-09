@@ -4,6 +4,7 @@ import { useOrchestratorStore } from "./stores/orchestratorStore";
 import AgentList from "./components/AgentList.vue";
 import EventStream from "./components/EventStream.vue";
 import RunDetailsPanel from "./components/RunDetailsPanel.vue";
+import LiveExecutionPanel from "./components/LiveExecutionPanel.vue";
 import RepoBoard from "./components/RepoBoard.vue";
 import ConfigPage from "./components/ConfigPage.vue";
 
@@ -101,6 +102,8 @@ function handleRunSelected(_id: string) {
           @select-agent="store.selectAgent"
         />
         <EventStream class="app-stream" />
+        <!-- T039: LiveExecutionPanel — thinking/tool/response/hook feed -->
+        <LiveExecutionPanel class="app-live-execution" />
         <RunDetailsPanel />
       </template>
 
@@ -222,6 +225,11 @@ function handleRunSelected(_id: string) {
 .app-stream {
   flex: 1;
   min-width: 0;
+}
+.app-live-execution {
+  width: 340px;
+  min-width: 280px;
+  flex-shrink: 0;
 }
 .app-repos {
   flex: 1;
