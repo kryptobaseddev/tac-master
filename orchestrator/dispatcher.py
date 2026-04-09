@@ -57,9 +57,13 @@ _TERMINAL_ISSUE_STATUSES = {
 _FAILED_COOLDOWN_SECONDS = 3600
 
 # Maximum wall-clock seconds a run may remain in the "running" state.
-# Hang protection — if we don't see the pid exit within this window, we
-# SIGKILL and mark the run failed.
-_RUN_HANG_TIMEOUT_SECONDS = 20 * 60  # 20 minutes
+# Last-resort guard against stuck subprocess trees. Raised from 1200 after
+# session 2026-04-09 — legitimate test auto-fix work (all_backend_tests) was
+# being killed mid-turn while Claude was actively resolving failures. The
+# stdin/stderr deadlock bugs that necessitated the original 20-min value are
+# fixed; this is now purely a backstop for truly wedged processes.
+# Related: T025, run d5ab7f05 (killed at 1220s mid-auto-fix turn 1).
+_RUN_HANG_TIMEOUT_SECONDS = 60 * 60  # 60 minutes
 
 
 class Dispatcher:
