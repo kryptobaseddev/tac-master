@@ -250,7 +250,9 @@ def main():
 
     # Get the plan file path directly from response
     logger.info("Getting plan file path")
-    plan_file_path = plan_response.output.strip()
+    # sdlc_planner sometimes wraps the path in backticks (e.g. `specs/issue-N.md`);
+    # strip whitespace, then backticks, then any remaining whitespace.
+    plan_file_path = plan_response.output.strip().strip("`").strip()
     
     # Validate the path exists (within worktree)
     if not plan_file_path:
