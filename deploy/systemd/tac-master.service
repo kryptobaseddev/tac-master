@@ -27,7 +27,10 @@ KillMode=mixed
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/srv/tac-master
+# claude CLI needs to write ~/.claude.json (config cache), ~/.claude/ (sessions),
+# and ~/.cache/ms-playwright (browser cache). /srv/tac-master is the daemon's
+# own data. Everything else in /home stays read-only.
+ReadWritePaths=/srv/tac-master /home/krypto/.claude /home/krypto/.claude.json /home/krypto/.cache
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
