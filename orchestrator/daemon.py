@@ -199,10 +199,12 @@ def cmd_doctor(cfg: TacMasterConfig) -> int:
     else:
         print("  runtime: all repos use native (podman not required)")
 
-    # Check state store + knowledge base schema
+    # Check state store + knowledge base + token tracker schemas
+    # Each subsystem's __init__ lazily creates its tables via CREATE TABLE IF NOT EXISTS
     try:
         store = StateStore(cfg.sqlite_path)
-        KnowledgeBase(store)  # ensures FTS5 triggers exist
+        KnowledgeBase(store)  # creates lessons + FTS5 tables
+        TokenTracker(store, cfg.home / "config" / "model_prices.yaml")  # creates token_ledger
         with store.conn() as c:
             tables = [r["name"] for r in c.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
