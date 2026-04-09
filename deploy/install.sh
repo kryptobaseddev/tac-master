@@ -67,17 +67,66 @@ npm config -g set prefix /usr/local
 # Authentication is via ANTHROPIC_API_KEY env var — NO `claude login` needed,
 # NO TTY required, NO browser needed. This runs cleanly in an LXC.
 log "Installing Claude Code CLI (@anthropic-ai/claude-code)..."
-if ! command -v claude >/dev/null 2>&1; then
-    npm install -g @anthropic-ai/claude-code \
-        || err "claude-code install failed. Run: npm install -g @anthropic-ai/claude-code"
+npm install -g @anthropic-ai/claude-code \
+    || err "claude-code install failed. Run: npm install -g @anthropic-ai/claude-code"
+
+# Clear bash's command hash so a freshly-installed binary is visible
+hash -r 2>/dev/null || true
+
+# Probe multiple locations — npm's global prefix can land in several places
+# depending on Node distribution (NodeSource, nvm, distro package, etc.).
+# We check the most likely candidates and symlink into /usr/local/bin if
+# the binary is found in a non-standard PATH location.
+log "Locating claude binary..."
+NPM_PREFIX="$(npm prefix -g 2>/dev/null || echo /usr)"
+NPM_ROOT="$(npm root -g 2>/dev/null || echo /usr/lib/node_modules)"
+CLAUDE_BIN=""
+for candidate in \
+    "/usr/local/bin/claude" \
+    "/usr/bin/claude" \
+    "${NPM_PREFIX}/bin/claude" \
+    "${NPM_ROOT}/@anthropic-ai/claude-code/bin/claude" \
+    "${NPM_ROOT}/@anthropic-ai/claude-code/cli.js" \
+    "$(command -v claude 2>/dev/null || true)"
+do
+    if [[ -n "$candidate" ]] && [[ -e "$candidate" ]]; then
+        CLAUDE_BIN="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$CLAUDE_BIN" ]]; then
+    err "claude binary not found. Diagnostic:"
+    log "  npm prefix -g: $NPM_PREFIX"
+    log "  npm root -g:   $NPM_ROOT"
+    log "  PATH:          $PATH"
+    log "  Searching filesystem..."
+    find /usr /opt /home -name 'claude' \( -type f -o -type l \) 2>/dev/null | head -20 | sed 's/^/    /'
+    log ""
+    log "  Package contents:"
+    ls -la "${NPM_ROOT}/@anthropic-ai/" 2>/dev/null | sed 's/^/    /' || echo "    (not found)"
+    log ""
+    log "  Retry manually: npm install -g @anthropic-ai/claude-code --verbose"
+    err "Cannot continue without claude binary"
 fi
 
-# Verify the binary is callable and print its version
-CLAUDE_BIN="$(command -v claude || true)"
-if [[ -z "$CLAUDE_BIN" ]]; then
-    err "claude binary not found in PATH after install. Check npm prefix."
-fi
-if CLAUDE_VERSION="$(claude --version 2>&1)"; then
+# Symlink into /usr/local/bin if it's somewhere else — keeps PATH simple
+# for the krypto user and all future invocations
+case "$CLAUDE_BIN" in
+    /usr/local/bin/claude)
+        ;;  # already in the canonical spot
+    /usr/bin/claude)
+        ;;  # standard Debian location, also fine
+    *)
+        log "claude found at non-standard location: $CLAUDE_BIN"
+        ln -sf "$CLAUDE_BIN" /usr/local/bin/claude
+        CLAUDE_BIN="/usr/local/bin/claude"
+        log "Symlinked → /usr/local/bin/claude"
+        ;;
+esac
+
+# Verify it's actually callable
+if CLAUDE_VERSION="$("$CLAUDE_BIN" --version 2>&1)"; then
     log "✓ claude installed: $CLAUDE_VERSION  ($CLAUDE_BIN)"
 else
     err "claude --version failed. Binary may be broken: $CLAUDE_BIN"

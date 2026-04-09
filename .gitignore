@@ -1,7 +1,30 @@
-# Secrets and local config
+# Secrets and local config — NEVER commit credentials or secret material
 .env
+.env.*
+!.env.sample
 config/identity.env
 config/*.local.yaml
+# Catch-all: any file with creds / secret / password / token in its name
+*creds*
+*secret*
+*password*
+*token*
+!*token_tracker*               # Python source code exception
+!*_token.py                     # Python source code exception
+.tac-master-creds.env
+.tac-master-creds.env.txt
+.tac-master-creds.*
+credentials.json
+credentials.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_ecdsa*
+authorized_keys
+known_hosts
 
 # Runtime state and local clones
 state/*.sqlite
