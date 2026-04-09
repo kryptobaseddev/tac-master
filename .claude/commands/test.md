@@ -41,19 +41,19 @@ TEST_COMMAND_TIMEOUT: 5 minutes
 
 1. **Python Syntax Check**
    - Preparation Command: None
-   - Command: `cd app/server && uv run python -m py_compile server.py main.py core/*.py`
+   - Command: `uv run python -m compileall orchestrator/ adws/`
    - test_name: "python_syntax_check"
    - test_purpose: "Validates Python syntax by compiling source files to bytecode, catching syntax errors like missing colons, invalid indentation, or malformed statements"
 
 2. **Backend Code Quality Check**
    - Preparation Command: None
-   - Command: `cd app/server && uv run ruff check .`
+   - Command: `uv run ruff check orchestrator/ adws/`
    - test_name: "backend_linting"
    - test_purpose: "Validates Python code quality, identifies unused imports, style violations, and potential bugs"
 
 3. **All Backend Tests**
    - Preparation Command: None
-   - Command: `cd app/server && uv run pytest tests/ -v --tb=short`
+   - Command: `uv run pytest adws/adw_tests/ -v --tb=short`
    - test_name: "all_backend_tests"
    - test_purpose: "Validates all backend functionality including file processing, SQL security, LLM integration, and API endpoints"
 
@@ -61,13 +61,13 @@ TEST_COMMAND_TIMEOUT: 5 minutes
 
 4. **TypeScript Type Check**
    - Preparation Command: None
-   - Command: `cd app/client && bun tsc --noEmit`
+   - Command: `cd dashboard/client && bun tsc --noEmit`
    - test_name: "typescript_check"
    - test_purpose: "Validates TypeScript type correctness without generating output files, catching type errors, missing imports, and incorrect function signatures"
 
 5. **Frontend Build**
    - Preparation Command: None
-   - Command: `cd app/client && bun run build`
+   - Command: `cd dashboard/client && bun run build`
    - test_name: "frontend_build"
    - test_purpose: "Validates the complete frontend build process including bundling, asset optimization, and production compilation"
 
@@ -101,14 +101,14 @@ TEST_COMMAND_TIMEOUT: 5 minutes
   {
     "test_name": "frontend_build",
     "passed": false,
-    "execution_command": "cd app/client && bun run build",
+    "execution_command": "cd dashboard/client && bun run build",
     "test_purpose": "Validates TypeScript compilation, module resolution, and production build process for the frontend application",
     "error": "TS2345: Argument of type 'string' is not assignable to parameter of type 'number'"
   },
   {
     "test_name": "all_backend_tests",
     "passed": true,
-    "execution_command": "cd app/server && uv run pytest tests/ -v --tb=short",
+    "execution_command": "uv run pytest adws/adw_tests/ -v --tb=short",
     "test_purpose": "Validates all backend functionality including file processing, SQL security, LLM integration, and API endpoints"
   }
 ]

@@ -6,10 +6,13 @@ Provides centralized git operations that build on top of github.py module.
 import subprocess
 import json
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TYPE_CHECKING
 
 # Import GitHub functions from existing module
 from adw_modules.github import get_repo_url, extract_repo_path, make_issue_comment
+
+if TYPE_CHECKING:
+    from adw_modules.state import ADWState
 
 
 def get_current_branch(cwd: Optional[str] = None) -> str:
@@ -44,7 +47,7 @@ def check_pr_exists(branch_name: str) -> Optional[str]:
     try:
         repo_url = get_repo_url()
         repo_path = extract_repo_path(repo_url)
-    except Exception as e:
+    except Exception:
         return None
 
     result = subprocess.run(
@@ -127,7 +130,7 @@ def get_pr_number(branch_name: str) -> Optional[str]:
     try:
         repo_url = get_repo_url()
         repo_path = extract_repo_path(repo_url)
-    except Exception as e:
+    except Exception:
         return None
 
     result = subprocess.run(

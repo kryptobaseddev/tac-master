@@ -1,11 +1,9 @@
 """Claude Code agent module for executing prompts programmatically."""
 
 import subprocess
-import sys
 import os
 import json
 import re
-import logging
 import time
 from typing import Optional, List, Dict, Any, Tuple, Final
 from dotenv import load_dotenv
@@ -13,7 +11,6 @@ from .data_types import (
     AgentPromptRequest,
     AgentPromptResponse,
     AgentTemplateRequest,
-    ClaudeCodeResultMessage,
     SlashCommand,
     ModelSet,
     RetryCode,
@@ -118,7 +115,7 @@ def truncate_output(
                         text = content[0].get("text", "")
                         if text:
                             return truncate_output(text, max_length, suffix)
-            except:
+            except Exception:
                 pass
         # If we couldn't extract anything meaningful, just show that it's JSONL
         return f"[JSONL output with {len(lines)} messages]{suffix}"
@@ -180,7 +177,7 @@ def parse_jsonl_output(
                     break
 
             return messages, result_message
-    except Exception as e:
+    except Exception:
         return [], None
 
 
@@ -371,7 +368,7 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
             messages, result_message = parse_jsonl_output(request.output_file)
 
             # Convert JSONL to JSON array file
-            json_file = convert_jsonl_to_json(request.output_file)
+            _json_file = convert_jsonl_to_json(request.output_file)
 
             if result_message:
                 # Extract session_id from result message
@@ -428,9 +425,9 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
                                             if text:
                                                 error_msg = f"Claude Code output: {text[:500]}"  # Truncate
                                                 break
-                                except:
+                                except Exception:
                                     pass
-                except:
+                except Exception:
                     pass
 
                 return AgentPromptResponse(
@@ -481,7 +478,7 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
                                 stdout_msg = lines[-1].strip()[
                                     :200
                                 ]  # Truncate to 200 chars
-            except:
+            except Exception:
                 pass
 
             if error_from_jsonl:

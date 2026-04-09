@@ -7,7 +7,6 @@
 Test script to verify simplified webhook workflow support.
 """
 
-import os
 
 # Mirror the constants from trigger_webhook.py
 DEPENDENT_WORKFLOWS = [

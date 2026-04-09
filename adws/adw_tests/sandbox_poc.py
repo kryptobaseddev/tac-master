@@ -54,7 +54,7 @@ with Sandbox(envs={"ANTHROPIC_API_KEY": api_key}) as sandbox:
         "~/.npm-global/bin/claude -p 'What is 2+2?' --output-format text --dangerously-skip-permissions < /dev/null",
         timeout=30000
     )
-    print(f"Q: What is 2+2?")
+    print("Q: What is 2+2?")
     print(f"A: {result.stdout.strip()}")
     
     # Test 2: JSON output format
@@ -63,7 +63,7 @@ with Sandbox(envs={"ANTHROPIC_API_KEY": api_key}) as sandbox:
         "~/.npm-global/bin/claude -p 'What is the capital of France?' --output-format json --dangerously-skip-permissions < /dev/null",
         timeout=30000
     )
-    print(f"Q: What is the capital of France?")
+    print("Q: What is the capital of France?")
     if result.stdout:
         import json
         response = json.loads(result.stdout)

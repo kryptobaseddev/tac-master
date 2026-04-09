@@ -34,8 +34,6 @@ import sys
 import os
 import logging
 import json
-import subprocess
-from typing import Optional
 from dotenv import load_dotenv
 
 from adw_modules.state import ADWState
@@ -51,13 +49,10 @@ from adw_modules.workflow_ops import (
     create_commit,
     format_issue_message,
     ensure_adw_id,
-    implement_plan,
     create_and_implement_patch,
-    AGENT_IMPLEMENTOR,
 )
 from adw_modules.worktree_ops import (
     create_worktree,
-    validate_worktree,
     get_ports_for_adw,
     is_port_available,
     find_next_available_ports,
@@ -66,10 +61,7 @@ from adw_modules.worktree_ops import (
 from adw_modules.utils import setup_logger, check_env_vars
 from adw_modules.data_types import (
     GitHubIssue,
-    AgentTemplateRequest,
-    AgentPromptResponse,
 )
-from adw_modules.agent import execute_template
 
 # Agent name constants
 AGENT_PATCH_PLANNER = "patch_planner"

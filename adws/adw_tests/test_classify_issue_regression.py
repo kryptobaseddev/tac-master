@@ -18,13 +18,12 @@ Run with:
     pytest adw_tests/test_classify_issue_regression.py -v
 """
 
-import glob
 import logging
 import os
 import sys
 import tempfile
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 

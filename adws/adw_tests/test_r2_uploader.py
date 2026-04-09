@@ -98,7 +98,7 @@ def test_r2_upload():
     print(f"   Size: {full_path.stat().st_size:,} bytes")
 
     # Upload the file
-    print(f"\n3️⃣ Uploading to R2...")
+    print("\n3️⃣ Uploading to R2...")
 
     # Generate a unique object key for testing
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -110,16 +110,16 @@ def test_r2_upload():
         print("❌ Upload failed! Check the logs above for details.")
         return False
 
-    print(f"✅ Upload successful!")
+    print("✅ Upload successful!")
     print(f"   URL: {public_url}")
 
     # Test if the URL is accessible
-    print(f"\n4️⃣ Testing public URL accessibility...")
+    print("\n4️⃣ Testing public URL accessibility...")
 
     try:
         response = requests.head(public_url, timeout=10)
         if response.status_code == 200:
-            print(f"✅ URL is publicly accessible!")
+            print("✅ URL is publicly accessible!")
             print(f"   Status: {response.status_code}")
             print(f"   Content-Type: {response.headers.get('Content-Type', 'N/A')}")
             print(
@@ -133,7 +133,7 @@ def test_r2_upload():
         print("   This might be normal if the bucket isn't fully public yet.")
 
     # Test batch upload
-    print(f"\n5️⃣ Testing batch upload with multiple paths...")
+    print("\n5️⃣ Testing batch upload with multiple paths...")
 
     test_screenshots = [
         test_file,  # This should work
@@ -143,7 +143,7 @@ def test_r2_upload():
 
     url_mapping = uploader.upload_screenshots(test_screenshots, "test_adw_id")
 
-    print(f"✅ Batch upload completed")
+    print("✅ Batch upload completed")
     print(f"   Total files: {len(test_screenshots)}")
     print(
         f"   Successful uploads: {sum(1 for v in url_mapping.values() if v.startswith('http'))}"

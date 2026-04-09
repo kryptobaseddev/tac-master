@@ -15,7 +15,7 @@ from adw_modules.data_types import (
     ADWExtractionResult,
 )
 from adw_modules.agent import execute_template
-from adw_modules.github import get_repo_url, extract_repo_path, ADW_BOT_IDENTIFIER
+from adw_modules.github import ADW_BOT_IDENTIFIER
 from adw_modules.state import ADWState
 from adw_modules.utils import parse_json
 
@@ -142,7 +142,7 @@ def _extract_classify_token(raw_output: str, logger: logging.Logger) -> str:
 
     Returns the matched token, or the stripped raw_output if no token is found.
     """
-    VALID_TOKENS = ("/chore", "/bug", "/feature", "/patch", "0")
+    _VALID_TOKENS = ("/chore", "/bug", "/feature", "/patch", "0")
     # Match the token as a whole word/token — not a substring of a longer path
     pattern = re.compile(r"(?<![/\w])(/chore|/bug|/feature|/patch|(?<![/\w])0)(?![/\w])")
     matches = pattern.findall(raw_output)

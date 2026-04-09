@@ -21,19 +21,15 @@ to create the worktree. It cannot create worktrees itself.
 """
 
 import json
-import subprocess
 import sys
-import os
 import logging
 from typing import Tuple, Optional, List
 from dotenv import load_dotenv
 from adw_modules.data_types import (
     AgentTemplateRequest,
-    GitHubIssue,
     AgentPromptResponse,
     TestResult,
     E2ETestResult,
-    IssueClassSlashCommand,
 )
 from adw_modules.agent import execute_template
 from adw_modules.github import (
@@ -42,13 +38,12 @@ from adw_modules.github import (
     make_issue_comment,
     get_repo_url,
 )
-from adw_modules.utils import make_adw_id, setup_logger, parse_json, check_env_vars
+from adw_modules.utils import setup_logger, parse_json, check_env_vars
 from adw_modules.state import ADWState
 from adw_modules.git_ops import commit_changes, finalize_git_operations
 from adw_modules.workflow_ops import (
     format_issue_message,
     create_commit,
-    ensure_adw_id,
     classify_issue,
 )
 from adw_modules.worktree_ops import validate_worktree
@@ -227,11 +222,11 @@ def post_comprehensive_test_summary(
         (e2e_failed_count if e2e_results else 0)
     )
     if total_failures > 0:
-        summary += f"\n### ❌ Overall Status: FAILED\n"
+        summary += "\n### ❌ Overall Status: FAILED\n"
         summary += f"Total failures: {total_failures}\n"
     else:
         total_tests = len(results) + len(e2e_results)
-        summary += f"\n### ✅ Overall Status: PASSED\n"
+        summary += "\n### ✅ Overall Status: PASSED\n"
         summary += f"All {total_tests} tests passed successfully!\n"
 
     # Post the summary to the issue

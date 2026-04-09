@@ -11,13 +11,12 @@ This script tests that both models can execute a simple prompt through agent.py 
 
 import sys
 import os
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from adw_modules.data_types import AgentPromptRequest, AgentPromptResponse, RetryCode
+from adw_modules.data_types import AgentPromptRequest, AgentPromptResponse
 from adw_modules.agent import prompt_claude_code, prompt_claude_code_with_retry
 from adw_modules.utils import make_adw_id
 
@@ -78,7 +77,7 @@ def test_model(model: str, adw_id: str) -> tuple[bool, str]:
 def test_retry_functionality(adw_id: str) -> tuple[bool, str]:
     """Test the retry functionality with a simple prompt."""
     print(f"\n{'='*50}")
-    print(f"Testing retry functionality")
+    print("Testing retry functionality")
     print(f"{'='*50}")
 
     # Create a simple test prompt
@@ -105,19 +104,19 @@ def test_retry_functionality(adw_id: str) -> tuple[bool, str]:
         )
 
         if response.success:
-            print(f"✅ Retry test - Success!")
+            print("✅ Retry test - Success!")
             print(f"Response: {response.output}")
             print(f"Retry code: {response.retry_code}")
             return True, "Retry functionality test: Success"
         else:
-            print(f"❌ Retry test - Failed!")
+            print("❌ Retry test - Failed!")
             print(f"Error: {response.output}")
             print(f"Retry code: {response.retry_code}")
             return False, f"Retry functionality test: {response.output}"
 
     except Exception as e:
         error_msg = f"Exception: {str(e)}"
-        print(f"❌ Retry test - Exception!")
+        print("❌ Retry test - Exception!")
         print(error_msg)
         return False, f"Retry functionality test: {error_msg}"
 
@@ -130,7 +129,7 @@ def main():
     print("Testing Claude Code agent with different models (in parallel)")
     print(f"ADW ID: {adw_id}")
     print(f"Models to test: {', '.join(MODELS)}")
-    print(f"Starting parallel execution...")
+    print("Starting parallel execution...")
 
     # Track results
     results = {}

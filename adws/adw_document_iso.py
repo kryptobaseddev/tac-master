@@ -22,7 +22,6 @@ to create the worktree. It cannot create worktrees itself.
 """
 
 import sys
-import os
 import logging
 import json
 import subprocess
@@ -49,7 +48,6 @@ from adw_modules.data_types import (
     GitHubUser,
     AgentTemplateRequest,
     DocumentationResult,
-    IssueClassSlashCommand,
 )
 from adw_modules.agent import execute_template
 from adw_modules.worktree_ops import validate_worktree

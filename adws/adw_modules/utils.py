@@ -6,7 +6,6 @@ import os
 import re
 import sys
 import uuid
-from datetime import datetime
 from typing import Any, TypeVar, Type, Union, Dict, Optional
 
 T = TypeVar('T')
@@ -139,7 +138,7 @@ def parse_json(text: str, target_type: Type[T] = None) -> Union[T, Any]:
         # If target_type is provided and has from_dict/parse_obj/model_validate methods (Pydantic)
         if target_type and hasattr(target_type, '__origin__'):
             # Handle List[SomeType] case
-            if target_type.__origin__ == list:
+            if target_type.__origin__ is list:
                 item_type = target_type.__args__[0]
                 # Try Pydantic v2 first, then v1
                 if hasattr(item_type, 'model_validate'):

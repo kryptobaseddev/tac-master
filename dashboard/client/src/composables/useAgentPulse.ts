@@ -16,7 +16,7 @@
 import { ref } from 'vue'
 
 // High-performance storage: plain object for timers (faster than Map)
-const pulseTimers: Record<string, NodeJS.Timeout> = {}
+const pulseTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
 // Track pulsing agents using Set for O(1) lookups
 const isPulsing = ref<Set<string>>(new Set())

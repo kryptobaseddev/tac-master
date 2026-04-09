@@ -31,19 +31,16 @@ import os
 import logging
 import json
 import subprocess
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Tuple
 from dotenv import load_dotenv
 
 from adw_modules.state import ADWState
 from adw_modules.github import (
     make_issue_comment,
-    get_repo_url,
-    extract_repo_path,
 )
 from adw_modules.workflow_ops import format_issue_message
 from adw_modules.utils import setup_logger, check_env_vars
 from adw_modules.worktree_ops import validate_worktree
-from adw_modules.data_types import ADWStateData
 
 # Agent name constant
 AGENT_SHIPPER = "shipper"
@@ -142,7 +139,7 @@ def manual_merge_to_main(branch_name: str, logger: logging.Logger) -> Tuple[bool
         # Try to restore original branch
         try:
             subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-        except:
+        except Exception:
             pass
         return False, str(e)
 
@@ -222,8 +219,8 @@ def main():
     # Post initial status
     make_issue_comment(
         issue_number,
-        format_issue_message(adw_id, "ops", f"🚢 Starting ship workflow\n"
-                           f"📋 Validating state completeness...")
+        format_issue_message(adw_id, "ops", "🚢 Starting ship workflow\n"
+                           "📋 Validating state completeness...")
     )
     
     # Step 1: Validate state completeness

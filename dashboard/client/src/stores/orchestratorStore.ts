@@ -228,6 +228,7 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   const isConnected = ref(false);
   const wsConnection = ref<WebSocket | null>(null);
   const websocketEventCount = ref(0);
+  const commandInputVisible = ref(false);
 
   // --- getters ---
   const activeAgents = computed(() =>
@@ -271,6 +272,21 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
 
   function clearEventStream() {
     eventStreamEntries.value = [];
+  }
+
+  function toggleCommandInput() {
+    commandInputVisible.value = !commandInputVisible.value;
+  }
+
+  function exportEventStream() {
+    const data = JSON.stringify(eventStreamEntries.value, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `event-stream-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function upsertRun(run: RunSummary) {
@@ -384,6 +400,7 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     repos,
     isConnected,
     websocketEventCount,
+    commandInputVisible,
 
     // getters
     activeAgents,
@@ -398,6 +415,8 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     selectAgent,
     toggleAutoScroll,
     clearEventStream,
+    toggleCommandInput,
+    exportEventStream,
     upsertRun,
     upsertRepo,
     addHookEvent,
