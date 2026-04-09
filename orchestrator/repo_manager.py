@@ -172,8 +172,14 @@ class RepoManager:
         copy's absolute path, and state files land in a single
         predictable location.
 
-        The copy is refreshed on every sync() to keep the substrate in
-        lockstep with tac-master's main repo.
+        FRESHNESS NOTE (T006 / T010): This method performs a FULL,
+        UNCONDITIONAL re-copy on every sync() call — there is no mtime or
+        hash check that could short-circuit the refresh. Lines 186-198 below
+        always blow away and re-copy each substrate directory. This means
+        substrate changes committed to tac-master propagate automatically to
+        every clone on the next dispatch without any manual intervention (no
+        need to nuke existing clones). Do not add a freshness check here
+        unless you also add a mechanism to force-refresh on demand.
         """
         for sub in SUBSTRATE_DIRS:
             src = self.home / sub
