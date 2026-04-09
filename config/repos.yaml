@@ -1,0 +1,88 @@
+# tac-master: Repository Allowlist
+#
+# Copy to config/repos.yaml and customize.
+# Only repos listed here will be acted upon by the orchestrator.
+# The bot account (krypto-agent) must have collaborator access to each.
+
+version: 1
+
+# Global defaults applied to every repo unless overridden inline.
+defaults:
+  # Workflow to run when a new issue is detected.
+  # Options: patch | plan_build | plan_build_test | plan_build_test_review | sdlc | sdlc_zte
+  #   patch                     → adw_patch_iso.py             (direct single-file fix)
+  #   plan_build                → adw_plan_build_iso.py        (P+I)
+  #   plan_build_test           → adw_plan_build_test_iso.py   (P+I+T)
+  #   plan_build_test_review    → adw_plan_build_test_review_iso.py (P+I+T+E)
+  #   sdlc                      → adw_sdlc_iso.py              (P+I+T+E+R, manual ship)
+  #   sdlc_zte                  → adw_sdlc_zte_iso.py          (P+I+T+E+R, auto-merge; "Zero Touch Engineering")
+  default_workflow: sdlc
+
+  # Model set: "base" (cost-optimized Sonnet) or "heavy" (Opus for planning/review).
+  model_set: base
+
+  # Poll interval in seconds.
+  poll_interval: 20
+
+  # Trigger rules for detecting work on an issue.
+  #   new_issue       → any newly opened issue triggers work
+  #   comment_adw     → comment "adw" on an existing issue triggers work
+  #   label           → apply one of `trigger_labels` to the issue
+  triggers:
+    - new_issue
+    - comment_adw
+    - label
+
+  trigger_labels:
+    - tac-master
+    - krypto
+
+  # If true, tac-master will auto-merge PRs it creates (ZTE).
+  # Per user policy, this is allowed for assigned repos and for tac-master's own repo.
+  auto_merge: true
+
+  # Runtime mode for ADW execution:
+  #   native  → fast subprocess on the host LXC (default, shared toolchain)
+  #   podman  → per-run rootless container from `container_image`, fully
+  #             isolated filesystem + clean slate + per-repo Dockerfile support
+  # Native is sufficient for homogeneous repo fleets. Use podman when repos
+  # need different Node/Python/Ruby/etc. versions or when you want each run
+  # in a disposable sandbox. See deploy/README.md §11.
+  runtime: native
+  container_image: tac-worker:latest
+
+# ----------------------------------------------------------------------------
+# Allowlisted repositories
+# ----------------------------------------------------------------------------
+repos:
+  # tac-master's own repo. Self-improvement loop — issues here trigger ADWs
+  # on tac-master itself. Per user policy, auto_merge is enabled.
+  - url: https://github.com/OWNER/tac-master
+    self: true
+    default_workflow: sdlc_zte
+    model_set: heavy  # use Opus for self-modification (higher quality)
+    auto_merge: true
+
+  # Example: a repo krypto-agent has been granted access to.
+  - url: https://github.com/OWNER/example-project
+    default_workflow: sdlc
+    model_set: base
+    auto_merge: true
+    trigger_labels:
+      - tac-master
+    # Optional: per-repo environment overrides passed to Claude
+    env:
+      PROJECT_NOTE: "This repo requires all tests to pass before PR."
+
+  # Example: a repo with non-standard runtime that needs a container.
+  # Requires `sudo bash scripts/tac-update.sh install-podman` first.
+  # - url: https://github.com/OWNER/legacy-ruby-app
+  #   default_workflow: plan_build_test
+  #   runtime: podman
+  #   container_image: tac-worker:latest    # or a per-repo image you build
+
+  # Example: a read-only / plan-only repo (orchestrator plans but does not push)
+  # - url: https://github.com/OWNER/sensitive-project
+  #   default_workflow: plan_build
+  #   auto_merge: false
+  #   dry_run: true
