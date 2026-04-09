@@ -297,6 +297,14 @@ class Dispatcher:
             "CLAUDE_CODE_PATH": self.cfg.identity.get("CLAUDE_CODE_PATH") or "claude",
             "ADW_MODEL_SET": repo.model_set,
             "TAC_MASTER_HOME": str(self.cfg.home),
+            # Force line-buffered Python output so run_<adw_id>.log shows
+            # progress in real time instead of only flushing on process exit.
+            # Without this, the log file appears frozen at "Allocated ports"
+            # for the entire duration of the run.
+            "PYTHONUNBUFFERED": "1",
+            # Tell the dashboard event hook where to POST. Defaults to
+            # http://localhost:4000/events which works from inside the LXC.
+            "TAC_DASHBOARD_URL": env.get("TAC_DASHBOARD_URL") or "http://localhost:4000/events",
         })
         # Per-repo env overrides
         for k, v in repo.env.items():
