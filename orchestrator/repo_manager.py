@@ -161,9 +161,19 @@ class RepoManager:
         )
 
     def _inject_substrate(self, target: Path) -> None:
-        """Symlink tac-master's adws/, .claude/, ai_docs/ into target.
+        """COPY tac-master's adws/, .claude/, ai_docs/ into target.
 
-        Also writes .git/info/exclude entries so they never appear in diffs.
+        Previously this used symlinks, but the symlinked adws/ caused
+        Python's import machinery to compute `adw_modules/state.py`'s
+        __file__ inconsistently between load() and save() calls. The ADW
+        would write state to one path and read it from another, and
+        tac-7's worktree_ops.validate_worktree always failed because of
+        the mismatch. Copies are unambiguous: __file__ is always the
+        copy's absolute path, and state files land in a single
+        predictable location.
+
+        The copy is refreshed on every sync() to keep the substrate in
+        lockstep with tac-master's main repo.
         """
         for sub in SUBSTRATE_DIRS:
             src = self.home / sub
@@ -171,18 +181,25 @@ class RepoManager:
             if not src.exists():
                 log.warning("Substrate source missing: %s", src)
                 continue
-            if dst.exists() or dst.is_symlink():
-                if dst.is_symlink() and os.readlink(dst) == str(src):
-                    continue  # already linked correctly
-                log.debug("Replacing existing %s", dst)
-                if dst.is_symlink() or dst.is_file():
-                    dst.unlink()
-                else:
-                    shutil.rmtree(dst)
-            dst.symlink_to(src, target_is_directory=True)
 
-        # Write exclude entries (idempotent). Target may be a clone or a worktree;
-        # `git rev-parse --git-path info/exclude` resolves the correct location.
+            # Remove stale symlinks from previous runs
+            if dst.is_symlink():
+                dst.unlink()
+
+            if dst.exists():
+                # Refresh: blow away and re-copy so tac-master updates propagate
+                shutil.rmtree(dst)
+
+            log.debug("Copying substrate: %s → %s", src, dst)
+            shutil.copytree(
+                src, dst,
+                symlinks=False,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+            )
+
+        # Write exclude entries (idempotent). Target is a clone.
+        # Also add the top-level substrate dirs themselves so the copies
+        # don't show up in `git status` inside the clone.
         try:
             exclude_path = subprocess.check_output(
                 ["git", "-C", str(target), "rev-parse", "--git-path", "info/exclude"],

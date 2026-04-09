@@ -46,6 +46,21 @@ WORKFLOW_SCRIPTS = {
     "sdlc_zte": "adw_sdlc_zte_iso.py",
 }
 
+# Terminal issue statuses that must NOT re-dispatch
+_TERMINAL_ISSUE_STATUSES = {
+    "dispatched", "completed", "failed", "aborted", "skipped",
+}
+
+# Minimum seconds between retries of a terminally-failed issue. 1 hour.
+# After this cooldown, a new comment "adw" or a new label add will still
+# re-qualify the issue — only the automatic re-dispatch loop is blocked.
+_FAILED_COOLDOWN_SECONDS = 3600
+
+# Maximum wall-clock seconds a run may remain in the "running" state.
+# Hang protection — if we don't see the pid exit within this window, we
+# SIGKILL and mark the run failed.
+_RUN_HANG_TIMEOUT_SECONDS = 20 * 60  # 20 minutes
+
 
 class Dispatcher:
     def __init__(
@@ -110,6 +125,7 @@ class Dispatcher:
     def _should_dispatch(self, repo: RepoConfig, issue: Issue) -> bool:
         last_comment_id = None
         reason = None
+        comment_is_adw = False
 
         if "new_issue" in repo.triggers and issue.comments_count == 0:
             reason = "new_issue"
@@ -124,6 +140,7 @@ class Dispatcher:
                 last_comment_id = last.id
                 if last.body.strip().lower() == "adw":
                     reason = reason or "comment_adw"
+                    comment_is_adw = True
 
         current_status = self.store.seen_issue(
             repo.url, issue.number, issue.title, last_comment_id
@@ -131,10 +148,23 @@ class Dispatcher:
 
         if reason is None:
             return False
-        if current_status in ("dispatched", "completed"):
+
+        # Terminal statuses block automatic re-dispatch. The only way to
+        # re-run a failed issue is an explicit "adw" comment (which updates
+        # last_comment_id and short-circuits this check).
+        if current_status in _TERMINAL_ISSUE_STATUSES:
+            if comment_is_adw:
+                log.info("Issue %s#%d terminal but new adw comment → retry",
+                         repo.url, issue.number)
+                return True
+
+            # Special case: failed/aborted with enough cooldown AND a new
+            # signal (new comment_id or new label) → allow retry.
+            # For now, block all automatic retries of terminal issues.
             log.debug("Issue %s#%d already %s, skipping",
                       repo.url, issue.number, current_status)
             return False
+
         log.info("Issue %s#%d qualifies (%s)", repo.url, issue.number, reason)
         return True
 
@@ -275,18 +305,54 @@ class Dispatcher:
 
     # ------------------------------------------------------------------
     def reap_finished_runs(self) -> None:
-        """Check active runs for completion. Called from the daemon loop."""
+        """Check active runs for completion. Called from the daemon loop.
+
+        Two-way reap:
+          1. Natural finish: pid gone → infer status from state.json
+          2. Hang detection: pid alive but run has been in "running" state
+             for more than _RUN_HANG_TIMEOUT_SECONDS → SIGKILL and fail.
+        """
+        import time as _time
+        now = int(_time.time())
         for run in self.store.list_active_runs():
             pid = run.get("pid")
             if not pid:
                 continue
+
+            pid_alive = True
             try:
                 os.kill(pid, 0)  # probe
-                continue  # still running
             except ProcessLookupError:
-                pass
+                pid_alive = False
             except PermissionError:
                 continue
+
+            if pid_alive:
+                # Check for hang
+                started = run.get("started_at") or 0
+                if now - started > _RUN_HANG_TIMEOUT_SECONDS:
+                    log.warning(
+                        "Run %s has been running for %ds > %ds — killing as hang",
+                        run["adw_id"], now - started, _RUN_HANG_TIMEOUT_SECONDS,
+                    )
+                    self._kill_run_tree(pid, run["adw_id"])
+                    self.store.update_run(
+                        run["adw_id"], status="failed", ended_at=now,
+                    )
+                    self.store.set_issue_status(
+                        run["repo_url"], run["issue_number"], "failed",
+                    )
+                    self.store.record_event(
+                        "error",
+                        json.dumps({
+                            "adw_id": run["adw_id"],
+                            "reason": "hang_timeout",
+                            "elapsed_s": now - started,
+                        }),
+                        repo_url=run["repo_url"],
+                        adw_id=run["adw_id"],
+                    )
+                continue  # still running (or just killed)
 
             # Process gone; mark finished. We don't know the exit code cleanly
             # because we spawned detached — the log file is the source of truth.
@@ -328,6 +394,26 @@ class Dispatcher:
                 self._run_reflect(adw_id, run)
             except Exception as e:
                 log.warning("Reflect failed for %s: %s", adw_id, e)
+
+    def _kill_run_tree(self, pid: int, adw_id: str) -> None:
+        """SIGKILL a run's entire process tree.
+
+        Uses pgrep to find children recursively so the daemon doesn't
+        leave zombie claude subprocesses.
+        """
+        import signal
+        try:
+            # Find the whole session/process group. We spawned with
+            # start_new_session=True so pid is a session leader.
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            log.info("Killed process group for pid %d (adw=%s)", pid, adw_id)
+        except (ProcessLookupError, PermissionError) as e:
+            log.debug("Could not kill pg for pid %d: %s", pid, e)
+            # Fallback: try just the main pid
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
 
     def _run_reflect(self, adw_id: str, run: dict) -> None:
         """Spawn adw_reflect_iso to write a lesson for this finished run."""

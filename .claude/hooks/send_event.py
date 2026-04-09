@@ -1,13 +1,14 @@
-#!/usr/bin/env -S uv run
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["httpx>=0.27"]
-# ///
-
+#!/usr/bin/env python3
 """tac-master dashboard event sender.
 
 Streams Claude Code hook events to the tac-master dashboard server so
 every agent phase is visible in real time across every repo.
+
+IMPORTANT: this script uses ONLY stdlib (urllib). It does NOT use uv or
+httpx because Claude Code invokes hooks via the shell PATH that its
+parent process saw, and `uv` is often not in that PATH when the ADW
+subprocess tree fires hooks. A pure python3 shebang + stdlib guarantees
+the hook runs in any environment where python3 exists (i.e. everywhere).
 
 Wired into .claude/settings.json for all 7 hook events. Every invocation:
   1. Reads the hook payload JSON from stdin
@@ -17,10 +18,6 @@ Wired into .claude/settings.json for all 7 hook events. Every invocation:
 
 Never raises. Never writes to stderr unless debug mode. Never interrupts the
 agent — the dashboard is observability, not control-plane.
-
-Usage (from settings.json hooks):
-    uv run $CLAUDE_PROJECT_DIR/.claude/hooks/send_event.py \
-        --source-app tac-master --event-type PreToolUse
 """
 
 from __future__ import annotations
@@ -32,12 +29,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-
-try:
-    import httpx
-except ImportError:
-    sys.exit(0)  # dependency missing — fail silent
-
+from urllib import request as urlrequest
+from urllib.error import URLError
 
 DEFAULT_URL = os.getenv("TAC_DASHBOARD_URL", "http://localhost:4000/events")
 DEBUG = os.getenv("TAC_HOOK_DEBUG", "").lower() in ("1", "true", "yes")
@@ -49,11 +42,7 @@ def _debug(msg: str) -> None:
 
 
 def detect_repo_url() -> str | None:
-    """Best-effort detection of the current repo URL from git remote.
-
-    Works inside a worktree because git remote -v is worktree-aware.
-    Returns the https URL with any embedded PAT stripped.
-    """
+    """Best-effort detection of the current repo URL from git remote."""
     env_url = os.getenv("GITHUB_REPO_URL")
     if env_url:
         return _strip_auth(env_url)
@@ -62,14 +51,14 @@ def detect_repo_url() -> str | None:
             ["git", "remote", "get-url", "origin"],
             text=True,
             stderr=subprocess.DEVNULL,
+            timeout=3,
         ).strip()
         return _normalize_remote(out)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return None
 
 
 def _normalize_remote(url: str) -> str:
-    # git@github.com:owner/repo.git  →  https://github.com/owner/repo
     if url.startswith("git@"):
         host, path = url.split(":", 1)
         host = host.replace("git@", "")
@@ -78,7 +67,6 @@ def _normalize_remote(url: str) -> str:
 
 
 def _strip_auth(url: str) -> str:
-    # https://user:pat@github.com/owner/repo → https://github.com/owner/repo
     if "@" not in url or "://" not in url:
         return url
     scheme, rest = url.split("://", 1)
@@ -88,22 +76,18 @@ def _strip_auth(url: str) -> str:
 
 
 def detect_adw_id() -> str | None:
-    """Find the ADW ID by walking up from cwd looking for agents/<id>/adw_state.json."""
     env_id = os.getenv("ADW_ID")
     if env_id:
         return env_id
 
     cwd = Path.cwd()
-    # tac-7 convention: worktree at trees/<adw_id>/ with agents/<adw_id>/ inside
     for parent in [cwd, *cwd.parents][:5]:
         agents = parent / "agents"
         if agents.is_dir():
-            # Pick the most recently modified id
             candidates = [p for p in agents.iterdir() if p.is_dir() and not p.name.startswith("_")]
             if candidates:
                 candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
                 return candidates[0].name
-        # Worktree dirs named like {slug}__{adw_id} — extract suffix
         if "__" in parent.name:
             suffix = parent.name.rsplit("__", 1)[1]
             if len(suffix) == 8 and all(c in "0123456789abcdef" for c in suffix):
@@ -112,8 +96,6 @@ def detect_adw_id() -> str | None:
 
 
 def detect_phase() -> str | None:
-    """Try to infer the phase from the CLAUDE_COMMAND env var (set by Claude Code
-    when running a slash command) or fall back to None."""
     cmd = os.getenv("CLAUDE_COMMAND") or os.getenv("ADW_PHASE")
     if not cmd:
         return None
@@ -136,6 +118,24 @@ def read_stdin_payload() -> dict[str, Any]:
     except (json.JSONDecodeError, OSError):
         pass
     return {}
+
+
+def post_json(url: str, payload: dict, timeout: float = 2.0) -> None:
+    """Fire-and-forget POST. Swallows all errors."""
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        req = urlrequest.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urlrequest.urlopen(req, timeout=timeout) as resp:
+            resp.read()  # drain to complete the request
+    except URLError as e:
+        _debug(f"POST {url} failed: {e}")
+    except Exception as e:  # noqa: BLE001 — intentional: never let a hook fail
+        _debug(f"POST {url} error: {e}")
 
 
 def main() -> int:
@@ -164,26 +164,26 @@ def main() -> int:
         "payload": payload,
     }
 
-    # Optional chat transcript
+    # Optional chat transcript (last ~40 turns)
     if args.add_chat and "transcript_path" in payload:
         tp = payload.get("transcript_path")
         if tp and isinstance(tp, str) and os.path.exists(tp):
             try:
                 with open(tp) as f:
-                    event["chat"] = [
-                        json.loads(line) for line in f if line.strip()
-                    ][-40:]  # last 40 turns
+                    lines = [ln for ln in f if ln.strip()]
+                event["chat"] = [
+                    json.loads(ln) for ln in lines[-40:]
+                ]
             except Exception:
                 pass
 
-    try:
-        with httpx.Client(timeout=2.0) as client:
-            client.post(args.server_url, json=event)
-    except Exception as e:
-        _debug(f"post failed: {e}")
-
+    post_json(args.server_url, event)
     return 0  # always succeed — never block Claude Code
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        # Triple-belt-and-suspenders: any unexpected error still exits 0
+        sys.exit(0)
