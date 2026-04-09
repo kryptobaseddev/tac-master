@@ -2,8 +2,7 @@
  * Pinia store for CLEO Epic & Task Tree data.
  *
  * Fetches from /api/cleo/epics (and lazily /api/cleo/tasks?parent=X) and
- * polls every 30 seconds to keep the panel fresh without requiring a page
- * reload.
+ * polls every 30 seconds to keep the panel fresh.
  *
  * @task T040
  * @epic T036
@@ -11,10 +10,6 @@
 
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-
-// ---------------------------------------------------------------------------
-// Types (mirroring cleo-api.ts server shapes)
-// ---------------------------------------------------------------------------
 
 export interface EpicProgress {
   total: number;
@@ -32,7 +27,7 @@ export interface EpicSummary {
   size: string | null;
   labels: string[];
   progress: EpicProgress;
-  pct: number; // 0-100
+  pct: number;
 }
 
 export interface TaskSummary {
@@ -47,12 +42,7 @@ export interface TaskSummary {
   acceptance: string[];
 }
 
-// ---------------------------------------------------------------------------
-// Store
-// ---------------------------------------------------------------------------
-
 export const useCleoStore = defineStore("cleo", () => {
-  // --- State ---
   const epics = ref<EpicSummary[]>([]);
   const tasksByEpic = ref<Record<string, TaskSummary[]>>({});
   const selectedEpicId = ref<string | null>(null);
@@ -63,21 +53,16 @@ export const useCleoStore = defineStore("cleo", () => {
 
   let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  // --- Getters ---
-
   const selectedEpic = computed<EpicSummary | null>(
     () => epics.value.find((e) => e.id === selectedEpicId.value) ?? null,
   );
 
-  /** True if any epic has an active child task — used to highlight the active epic */
   const activeEpicId = computed<string | null>(() => {
     for (const epic of epics.value) {
       if (epic.progress.active > 0) return epic.id;
     }
     return null;
   });
-
-  // --- Actions ---
 
   async function fetchEpics(): Promise<void> {
     loading.value = true;
@@ -123,7 +108,6 @@ export const useCleoStore = defineStore("cleo", () => {
     stopPolling();
     _pollTimer = setInterval(() => {
       fetchEpics();
-      // Refresh any expanded epic's tasks too
       if (selectedEpicId.value) fetchTasks(selectedEpicId.value);
     }, intervalMs);
   }
@@ -141,7 +125,6 @@ export const useCleoStore = defineStore("cleo", () => {
   }
 
   return {
-    // state
     epics,
     tasksByEpic,
     selectedEpicId,
@@ -149,10 +132,8 @@ export const useCleoStore = defineStore("cleo", () => {
     error,
     dbPath,
     lastFetched,
-    // getters
     selectedEpic,
     activeEpicId,
-    // actions
     fetchEpics,
     fetchTasks,
     selectEpic,

@@ -13,9 +13,7 @@
     </div>
 
     <!-- Error banner -->
-    <div v-if="store.error" class="ett-error">
-      {{ store.error }}
-    </div>
+    <div v-if="store.error" class="ett-error">{{ store.error }}</div>
 
     <!-- Empty state -->
     <div v-if="!store.loading && store.epics.length === 0 && !store.error" class="ett-empty">
@@ -34,7 +32,7 @@
           'ett-epic-expanded': expandedEpics.has(epic.id),
         }"
       >
-        <!-- Epic card header (clickable to expand/collapse) -->
+        <!-- Epic card header -->
         <div class="ett-epic-header" @click="toggleEpic(epic.id)">
           <div class="ett-epic-title-row">
             <span class="ett-epic-chevron">{{ expandedEpics.has(epic.id) ? '▾' : '▸' }}</span>
@@ -44,7 +42,6 @@
               {{ epic.priority.toUpperCase().slice(0, 4) }}
             </span>
           </div>
-
           <!-- Progress bar -->
           <div class="ett-progress-row">
             <div class="ett-progress-bar-track">
@@ -55,26 +52,18 @@
               ></div>
             </div>
             <span class="ett-progress-label">{{ epic.pct }}%</span>
-            <span class="ett-progress-counts">
-              {{ epic.progress.done }}/{{ epic.progress.total }}
-            </span>
+            <span class="ett-progress-counts">{{ epic.progress.done }}/{{ epic.progress.total }}</span>
           </div>
         </div>
 
         <!-- Task list (visible when expanded) -->
         <div v-if="expandedEpics.has(epic.id)" class="ett-task-list">
-          <!-- Loading tasks -->
           <div v-if="!store.tasksByEpic[epic.id]" class="ett-task-loading">
-            <span class="ett-spinner">&#9679;</span> loading tasks…
+            <span class="ett-spinner">&#9679;</span> loading tasks...
           </div>
-          <!-- No tasks -->
-          <div
-            v-else-if="store.tasksByEpic[epic.id].length === 0"
-            class="ett-no-tasks"
-          >
+          <div v-else-if="store.tasksByEpic[epic.id].length === 0" class="ett-no-tasks">
             No child tasks found.
           </div>
-          <!-- Task rows -->
           <div
             v-for="task in store.tasksByEpic[epic.id]"
             :key="task.id"
@@ -100,8 +89,6 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { useCleoStore, type EpicSummary } from "../../stores/cleoStore";
 
 const store = useCleoStore();
-
-// Track which epics are expanded locally
 const expandedEpics = ref<Set<string>>(new Set());
 
 function toggleEpic(id: string): void {
@@ -111,13 +98,8 @@ function toggleEpic(id: string): void {
     expandedEpics.value.add(id);
     store.selectEpic(id);
   }
-  // Trigger reactivity
   expandedEpics.value = new Set(expandedEpics.value);
 }
-
-// ---------------------------------------------------------------------------
-// Status helpers
-// ---------------------------------------------------------------------------
 
 function normaliseStatus(status: string): string {
   const s = (status ?? "").toLowerCase();
@@ -144,10 +126,6 @@ function progressFillClass(epic: EpicSummary): string {
   return "ett-fill-low";
 }
 
-// ---------------------------------------------------------------------------
-// Time helper
-// ---------------------------------------------------------------------------
-
 function relativeTime(d: Date): string {
   const secs = Math.floor((Date.now() - d.getTime()) / 1000);
   if (secs < 60) return `${secs}s ago`;
@@ -156,23 +134,11 @@ function relativeTime(d: Date): string {
   return `${Math.floor(mins / 60)}h ago`;
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
-
-onMounted(() => {
-  store.initialize();
-});
-
-onUnmounted(() => {
-  store.stopPolling();
-});
+onMounted(() => { store.initialize(); });
+onUnmounted(() => { store.stopPolling(); });
 </script>
 
 <style scoped>
-/* ------------------------------------------------------------------ */
-/* Container                                                            */
-/* ------------------------------------------------------------------ */
 .epic-task-tree {
   display: flex;
   flex-direction: column;
@@ -184,9 +150,6 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* ------------------------------------------------------------------ */
-/* Header                                                               */
-/* ------------------------------------------------------------------ */
 .ett-header {
   display: flex;
   align-items: center;
@@ -236,9 +199,6 @@ onUnmounted(() => {
 }
 .ett-refresh-btn:hover { color: #8b949e; }
 
-/* ------------------------------------------------------------------ */
-/* Error / empty states                                                 */
-/* ------------------------------------------------------------------ */
 .ett-error {
   margin: 8px 12px;
   padding: 6px 10px;
@@ -255,9 +215,6 @@ onUnmounted(() => {
   text-align: center;
 }
 
-/* ------------------------------------------------------------------ */
-/* Epic list scroll area                                                */
-/* ------------------------------------------------------------------ */
 .ett-epic-list {
   flex: 1;
   overflow-y: auto;
@@ -268,9 +225,6 @@ onUnmounted(() => {
 .ett-epic-list::-webkit-scrollbar-track { background: transparent; }
 .ett-epic-list::-webkit-scrollbar-thumb { background: #21262d; border-radius: 2px; }
 
-/* ------------------------------------------------------------------ */
-/* Epic card                                                            */
-/* ------------------------------------------------------------------ */
 .ett-epic-card {
   border-left: 2px solid #21262d;
   margin: 2px 8px;
@@ -292,9 +246,6 @@ onUnmounted(() => {
 }
 .ett-epic-header:hover { background: #1c2128; }
 
-/* ------------------------------------------------------------------ */
-/* Epic title row                                                       */
-/* ------------------------------------------------------------------ */
 .ett-epic-title-row {
   display: flex;
   align-items: baseline;
@@ -325,7 +276,6 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-/* Priority badges */
 .ett-priority-badge {
   flex-shrink: 0;
   font-size: 9px;
@@ -339,9 +289,6 @@ onUnmounted(() => {
 .ett-priority-medium   { background: #212830; color: #8b949e; }
 .ett-priority-low      { background: #161b22; color: #484f58; }
 
-/* ------------------------------------------------------------------ */
-/* Progress bar                                                         */
-/* ------------------------------------------------------------------ */
 .ett-progress-row {
   display: flex;
   align-items: center;
@@ -380,9 +327,6 @@ onUnmounted(() => {
   color: #484f58;
 }
 
-/* ------------------------------------------------------------------ */
-/* Task list                                                            */
-/* ------------------------------------------------------------------ */
 .ett-task-list {
   background: #0d1117;
   border-top: 1px solid #21262d;
@@ -395,9 +339,7 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-.ett-spinner {
-  animation: pulse 1s ease-in-out infinite;
-}
+.ett-spinner { animation: pulse 1s ease-in-out infinite; }
 
 .ett-task-row {
   display: flex;
@@ -410,13 +352,8 @@ onUnmounted(() => {
 .ett-task-row:hover { background: #161b22; }
 .ett-task-row:last-child { border-bottom: none; }
 
-/* Task status classes */
 .ett-task-done   { opacity: 0.55; }
-.ett-task-active { }
-.ett-task-failed { }
-.ett-task-pending { }
 
-/* Status icon */
 .ett-task-icon {
   flex-shrink: 0;
   width: 14px;
@@ -453,9 +390,6 @@ onUnmounted(() => {
   text-transform: uppercase;
 }
 
-/* ------------------------------------------------------------------ */
-/* Animations                                                           */
-/* ------------------------------------------------------------------ */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
