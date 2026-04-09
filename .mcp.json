@@ -6,7 +6,7 @@
         "@playwright/mcp@latest",
         "--isolated",
         "--config",
-        "./playwright-mcp-config.json"
+        "/srv/tac-master/repos/kryptobaseddev_tac-master/trees/ad2da1f7/playwright-mcp-config.json"
       ]
     }
   }
