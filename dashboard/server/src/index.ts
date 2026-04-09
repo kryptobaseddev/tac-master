@@ -19,6 +19,7 @@ import {
   getRepoStatuses,
   getActiveAndRecentRuns,
   getLessons,
+  getRunPhases,
 } from "./db";
 import {
   getReposConfig,
@@ -38,6 +39,8 @@ import {
   type RepoEntry,
 } from "./config";
 import type { HookEvent, WsMessage } from "./types";
+import { getEpics, getTasksByParent, getTaskById } from "./cleo-api";
+import { parseStreamFile, resolveStreamPath, listStreamPhases } from "./stream-parser";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const ALLOW_ORIGIN = process.env.CORS_ORIGIN ?? "*";
@@ -202,6 +205,15 @@ const server = Bun.serve({
     if (url.pathname === "/api/runs" && req.method === "GET") {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       return json({ runs: getActiveAndRecentRuns(limit) });
+    }
+
+    // --- Phase breakdown for a specific run (T038) ---
+    // GET /api/runs/:adw_id/phases
+    // Returns PITER phase list with status per phase derived from events + run state.
+    const phaseMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/phases$/);
+    if (phaseMatch && req.method === "GET") {
+      const adwId = decodeURIComponent(phaseMatch[1]);
+      return json({ adw_id: adwId, phases: getRunPhases(adwId) });
     }
 
     // --- Lessons feed (knowledge base) ---
@@ -386,6 +398,93 @@ const server = Bun.serve({
         return json(result, result.ok ? 200 : 422);
       } catch (e: any) {
         return json({ ok: false, error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // ============================================================
+    // Stream parser endpoints (T039)
+    // ============================================================
+
+    /**
+     * GET /api/stream/:adw_id/:phase
+     *
+     * Parse raw_output.jsonl for a specific agent run phase and return
+     * structured thinking / response / tool_use events.
+     *
+     * Query params:
+     *   limit (default 200) — cap number of events returned
+     *
+     * @task T039
+     * @epic T036
+     */
+    const streamMatch = url.pathname.match(/^\/api\/stream\/([^/]+)\/([^/]+)$/);
+    if (streamMatch && req.method === "GET") {
+      const adwId = decodeURIComponent(streamMatch[1]);
+      const phase = decodeURIComponent(streamMatch[2]);
+      const limit = Number(url.searchParams.get("limit") ?? 200);
+
+      const filePath = resolveStreamPath(adwId, phase);
+      if (!filePath) {
+        return json({ error: "raw_output.jsonl not found for this adw_id/phase" }, 404);
+      }
+
+      try {
+        const events = await parseStreamFile(filePath);
+        const sliced = events.slice(0, limit);
+        return json({ adw_id: adwId, phase, events: sliced, total: events.length });
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    /**
+     * GET /api/stream/:adw_id
+     *
+     * List all phases that have a raw_output.jsonl for this adw_id.
+     *
+     * @task T039
+     */
+    const streamRootMatch = url.pathname.match(/^\/api\/stream\/([^/]+)$/);
+    if (streamRootMatch && req.method === "GET") {
+      const adwId = decodeURIComponent(streamRootMatch[1]);
+      const phases = listStreamPhases(adwId);
+      return json({ adw_id: adwId, phases: phases.map((p) => p.phase) });
+    }
+
+    // ============================================================
+    // CLEO task-tree API  (T040)
+    // ============================================================
+
+    // GET /api/cleo/epics — all epics with child-task progress
+    if (url.pathname === "/api/cleo/epics" && req.method === "GET") {
+      try {
+        return json(getEpics());
+      } catch (e: any) {
+        return json({ epics: [], error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // GET /api/cleo/tasks?parent=TXXX — direct children of an epic/task
+    if (url.pathname === "/api/cleo/tasks" && req.method === "GET") {
+      const parentId = url.searchParams.get("parent");
+      if (!parentId) return json({ error: "parent query param required" }, 400);
+      try {
+        return json({ tasks: getTasksByParent(parentId) });
+      } catch (e: any) {
+        return json({ tasks: [], error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // GET /api/cleo/task/:id — single task detail
+    if (url.pathname.startsWith("/api/cleo/task/") && req.method === "GET") {
+      const id = url.pathname.replace("/api/cleo/task/", "").split("/")[0];
+      if (!id) return json({ error: "task id required" }, 400);
+      try {
+        const task = getTaskById(id);
+        if (!task) return json({ error: "not found" }, 404);
+        return json(task);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
       }
     }
 
