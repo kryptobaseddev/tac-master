@@ -12,6 +12,9 @@ WorkingDirectory=/srv/tac-master
 EnvironmentFile=-/srv/tac-master/config/identity.env
 Environment=TAC_MASTER_HOME=/srv/tac-master
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/krypto/.local/bin:/home/krypto/.cargo/bin
+# uv needs a writable cache — /home is read-only due to ProtectHome.
+Environment=UV_CACHE_DIR=/srv/tac-master/state/uv-cache
+Environment=UV_PYTHON_INSTALL_DIR=/srv/tac-master/state/uv-python
 ExecStart=/home/krypto/.local/bin/uv run orchestrator/daemon.py
 Restart=always
 RestartSec=10

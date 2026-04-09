@@ -217,6 +217,13 @@ if [[ -d "$TAC_HOME/dashboard/client" ]]; then
     fi
 fi
 
+# ---- Prepare writable dirs that the hardened systemd units need ----
+# uv writes to ~/.cache/uv by default, but ProtectHome=read-only blocks that.
+# Redirect UV_CACHE_DIR and UV_PYTHON_INSTALL_DIR into /srv/tac-master/state/.
+log "Preparing writable runtime dirs..."
+mkdir -p "$TAC_HOME/state/uv-cache" "$TAC_HOME/state/uv-python" "$TAC_HOME/logs"
+chown -R "$TAC_USER:$TAC_USER" "$TAC_HOME/state" "$TAC_HOME/logs"
+
 # ---- Install systemd units ----
 log "Installing systemd units..."
 install -m 0644 deploy/systemd/tac-master.service /etc/systemd/system/tac-master.service
