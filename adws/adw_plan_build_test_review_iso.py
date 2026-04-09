@@ -65,7 +65,7 @@ def main():
         issue_number,
         adw_id,
     ]
-    print(f"\n=== ISOLATED PLAN PHASE ===")
+    print("\n=== ISOLATED PLAN PHASE ===")
     print(f"Running: {' '.join(plan_cmd)}")
     plan = subprocess.run(plan_cmd)
     if plan.returncode != 0:
@@ -80,7 +80,7 @@ def main():
         issue_number,
         adw_id,
     ]
-    print(f"\n=== ISOLATED BUILD PHASE ===")
+    print("\n=== ISOLATED BUILD PHASE ===")
     print(f"Running: {' '.join(build_cmd)}")
     build = subprocess.run(build_cmd)
     if build.returncode != 0:
@@ -98,7 +98,7 @@ def main():
     if skip_e2e:
         test_cmd.append("--skip-e2e")
     
-    print(f"\n=== ISOLATED TEST PHASE ===")
+    print("\n=== ISOLATED TEST PHASE ===")
     print(f"Running: {' '.join(test_cmd)}")
     test = subprocess.run(test_cmd)
     if test.returncode != 0:
@@ -116,16 +116,16 @@ def main():
     if skip_resolution:
         review_cmd.append("--skip-resolution")
     
-    print(f"\n=== ISOLATED REVIEW PHASE ===")
+    print("\n=== ISOLATED REVIEW PHASE ===")
     print(f"Running: {' '.join(review_cmd)}")
     review = subprocess.run(review_cmd)
     if review.returncode != 0:
         print("Isolated review phase failed")
         sys.exit(1)
 
-    print(f"\n=== ISOLATED WORKFLOW COMPLETED ===")
+    print("\n=== ISOLATED WORKFLOW COMPLETED ===")
     print(f"ADW ID: {adw_id}")
-    print(f"All phases completed successfully!")
+    print("All phases completed successfully!")
 
 
 if __name__ == "__main__":

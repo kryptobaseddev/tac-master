@@ -130,18 +130,18 @@ def trigger_adw_workflow(issue_number: int) -> bool:
 def check_and_process_issues():
     """Main function that checks for issues and processes qualifying ones."""
     if shutdown_requested:
-        print(f"INFO: Shutdown requested, skipping check cycle")
+        print("INFO: Shutdown requested, skipping check cycle")
         return
     
     start_time = time.time()
-    print(f"INFO: Starting issue check cycle")
+    print("INFO: Starting issue check cycle")
     
     try:
         # Fetch all open issues
         issues = fetch_open_issues(REPO_PATH)
         
         if not issues:
-            print(f"INFO: No open issues found")
+            print("INFO: No open issues found")
             return
         
         # Track newly qualified issues
@@ -167,7 +167,7 @@ def check_and_process_issues():
             
             for issue_number in new_qualifying_issues:
                 if shutdown_requested:
-                    print(f"INFO: Shutdown requested, stopping issue processing")
+                    print("INFO: Shutdown requested, stopping issue processing")
                     break
                 
                 # Trigger the workflow
@@ -176,7 +176,7 @@ def check_and_process_issues():
                 else:
                     print(f"WARNING: Failed to process issue #{issue_number}, will retry in next cycle")
         else:
-            print(f"INFO: No new qualifying issues found")
+            print("INFO: No new qualifying issues found")
         
         # Log performance metrics
         cycle_time = time.time() - start_time
@@ -191,9 +191,9 @@ def check_and_process_issues():
 
 def main():
     """Main entry point for the cron trigger."""
-    print(f"INFO: Starting ADW cron trigger")
+    print("INFO: Starting ADW cron trigger")
     print(f"INFO: Repository: {REPO_PATH}")
-    print(f"INFO: Polling interval: 20 seconds")
+    print("INFO: Polling interval: 20 seconds")
     
     # Set up signal handlers
     signal.signal(signal.SIGINT, signal_handler)
@@ -206,12 +206,12 @@ def main():
     check_and_process_issues()
     
     # Main loop
-    print(f"INFO: Entering main scheduling loop")
+    print("INFO: Entering main scheduling loop")
     while not shutdown_requested:
         schedule.run_pending()
         time.sleep(1)
     
-    print(f"INFO: Shutdown complete")
+    print("INFO: Shutdown complete")
 
 
 if __name__ == "__main__":

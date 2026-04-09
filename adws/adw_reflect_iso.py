@@ -21,7 +21,6 @@ Invoked by the orchestrator after reap_finished_runs detects completion.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time

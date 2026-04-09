@@ -175,10 +175,10 @@ class KnowledgeBase:
         if len(primary) >= k:
             return primary
         remaining = k - len(primary)
-        have_ids = {l.adw_id for l in primary}
+        have_ids = {lesson.adw_id for lesson in primary}
         fallback = [
-            l for l in self.search(issue_title, limit=k + remaining)
-            if l.adw_id not in have_ids
+            lesson for lesson in self.search(issue_title, limit=k + remaining)
+            if lesson.adw_id not in have_ids
         ][:remaining]
         return primary + fallback
 
@@ -215,10 +215,10 @@ class KnowledgeBase:
             "and plan generation. Do NOT blindly copy; adapt to the current issue.",
             "",
         ]
-        for i, l in enumerate(lessons, 1):
-            short_body = l.body[:1500]
-            parts.append(f"### {i}. {l.title} ({l.result or '?'})")
-            parts.append(f"*repo: {l.repo_url}  •  adw: {l.adw_id}*")
+        for i, lesson in enumerate(lessons, 1):
+            short_body = lesson.body[:1500]
+            parts.append(f"### {i}. {lesson.title} ({lesson.result or '?'})")
+            parts.append(f"*repo: {lesson.repo_url}  •  adw: {lesson.adw_id}*")
             parts.append("")
             parts.append(short_body)
             parts.append("")
@@ -283,7 +283,8 @@ def _sanitize_fts(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _cli() -> int:
-    import argparse, sys
+    import argparse
+    import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from orchestrator.config import load_config
     from orchestrator.state_store import StateStore

@@ -21,7 +21,6 @@ import logging
 import os
 import secrets
 import subprocess
-import sys
 from pathlib import Path
 
 from .budget import BudgetEnforcer
@@ -134,7 +133,7 @@ class Dispatcher:
         if "new_issue" in repo.triggers and issue.comments_count == 0:
             reason = "new_issue"
 
-        if "label" in repo.triggers and any(l in repo.trigger_labels for l in issue.labels):
+        if "label" in repo.triggers and any(label in repo.trigger_labels for label in issue.labels):
             reason = reason or "label"
 
         if "comment_adw" in repo.triggers and issue.comments_count > 0:
@@ -225,7 +224,7 @@ class Dispatcher:
                     json.dumps({
                         "adw_id": adw_id,
                         "lesson_count": len(lessons),
-                        "lesson_adws": [l.adw_id for l in lessons],
+                        "lesson_adws": [lesson.adw_id for lesson in lessons],
                     }),
                     repo_url=repo.url,
                     adw_id=adw_id,
@@ -457,7 +456,6 @@ class Dispatcher:
     def _run_reflect(self, adw_id: str, run: dict) -> None:
         """Spawn adw_reflect_iso to write a lesson for this finished run."""
         import os
-        import subprocess
         wt = run.get("worktree_path")
         if not wt:
             return

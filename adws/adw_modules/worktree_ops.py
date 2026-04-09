@@ -5,6 +5,7 @@ and allocating unique ports for each isolated instance.
 """
 
 import os
+import shutil
 import subprocess
 import logging
 import socket

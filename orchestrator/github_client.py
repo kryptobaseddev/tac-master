@@ -89,7 +89,7 @@ class GitHubClient:
                     title=raw.get("title", ""),
                     body=raw.get("body") or "",
                     state=raw.get("state", "open"),
-                    labels=[l["name"] for l in raw.get("labels", [])],
+                    labels=[label["name"] for label in raw.get("labels", [])],
                     comments_count=raw.get("comments", 0),
                     updated_at=raw.get("updated_at", ""),
                     html_url=raw.get("html_url", ""),

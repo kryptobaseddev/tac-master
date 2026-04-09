@@ -20,7 +20,6 @@ Environment Requirements:
 import os
 import subprocess
 import sys
-from typing import Optional
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import uvicorn
@@ -30,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adw_modules.utils import make_adw_id, setup_logger, get_safe_subprocess_env
 from adw_modules.github import make_issue_comment, ADW_BOT_IDENTIFIER
-from adw_modules.workflow_ops import extract_adw_info, AVAILABLE_ADW_WORKFLOWS
+from adw_modules.workflow_ops import extract_adw_info
 from adw_modules.state import ADWState
 
 # Load environment variables
@@ -89,7 +88,7 @@ async def github_webhook(request: Request):
 
             # Ignore issues from ADW bot to prevent loops
             if ADW_BOT_IDENTIFIER in issue_body:
-                print(f"Ignoring ADW bot issue to prevent loop")
+                print("Ignoring ADW bot issue to prevent loop")
                 workflow = None
             # Check if body contains "adw_"
             elif "adw_" in issue_body.lower():
@@ -112,7 +111,7 @@ async def github_webhook(request: Request):
 
             # Ignore comments from ADW bot to prevent loops
             if ADW_BOT_IDENTIFIER in comment_body:
-                print(f"Ignoring ADW bot comment to prevent loop")
+                print("Ignoring ADW bot comment to prevent loop")
                 workflow = None
             # Check if comment contains "adw_"
             elif "adw_" in comment_body.lower():
@@ -208,7 +207,7 @@ async def github_webhook(request: Request):
             print(f"Working directory: {repo_root}")
 
             # Launch in background using Popen with filtered environment
-            process = subprocess.Popen(
+            subprocess.Popen(
                 cmd,
                 cwd=repo_root,  # Run from repository root where .claude/commands/ is located
                 env=get_safe_subprocess_env(),  # Pass only required environment variables
@@ -327,7 +326,7 @@ async def health():
 
 if __name__ == "__main__":
     print(f"Starting server on http://0.0.0.0:{PORT}")
-    print(f"Webhook endpoint: POST /gh-webhook")
-    print(f"Health check: GET /health")
+    print("Webhook endpoint: POST /gh-webhook")
+    print("Health check: GET /health")
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)

@@ -10,21 +10,24 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
 
+// Enable syntax highlighting for code blocks via renderer
+marked.use({
+  renderer: {
+    code({ text, lang }: { text: string; lang?: string }) {
+      if (lang && hljs.getLanguage(lang)) {
+        try {
+          return `<pre><code class="hljs language-${lang}">${hljs.highlight(text, { language: lang }).value}</code></pre>\n`
+        } catch (err) {
+          console.error('Syntax highlighting error:', err)
+        }
+      }
+      return `<pre><code class="hljs">${hljs.highlightAuto(text).value}</code></pre>\n`
+    }
+  }
+})
+
 // Configure marked for optimal rendering
 marked.setOptions({
-  // Enable syntax highlighting for code blocks
-  highlight: function(code: string, lang: string) {
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(code, { language: lang }).value
-      } catch (err) {
-        console.error('Syntax highlighting error:', err)
-      }
-    }
-    // Auto-detect language if not specified
-    return hljs.highlightAuto(code).value
-  },
-
   // GitHub Flavored Markdown
   gfm: true,
 
@@ -33,9 +36,6 @@ marked.setOptions({
 
   // Use pedantic mode for more strict markdown parsing
   pedantic: false,
-
-  // Enable smartypants for better typography
-  smartypants: true,
 })
 
 /**

@@ -6,7 +6,7 @@
     },
     "contextOptions": {
       "recordVideo": {
-        "dir": "./videos",
+        "dir": "/srv/tac-master/repos/kryptobaseddev_tac-master/trees/4d4917bf/videos",
         "size": {
           "width": 1920,
           "height": 1080

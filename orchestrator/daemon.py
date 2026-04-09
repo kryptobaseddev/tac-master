@@ -26,6 +26,7 @@ Under systemd:  see deploy/systemd/tac-master.service
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import signal
 import sys
@@ -91,6 +92,7 @@ def _build_system(cfg: TacMasterConfig) -> tuple[Dispatcher, StateStore, GitHubC
 # ----------------------------------------------------------------------------
 def cmd_doctor(cfg: TacMasterConfig) -> int:
     """Validate config and environment. Exit code = number of problems."""
+    print(f"doctor UTC:    {datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}")
     problems = 0
     print(f"home:          {cfg.home}")
     print(f"sqlite:        {cfg.sqlite_path}")
@@ -134,7 +136,8 @@ def cmd_doctor(cfg: TacMasterConfig) -> int:
         print(f"  mcp config {mcp}: {'✓' if p.exists() else '⚠ missing (review phase degraded)'}")
 
     # Check Claude Code CLI is installed and callable
-    import shutil as _sh, subprocess as _sp
+    import shutil as _sh
+    import subprocess as _sp
     claude_bin = cfg.identity.get("CLAUDE_CODE_PATH") or _sh.which("claude")
     if not claude_bin:
         print("  claude code: ✗ NOT FOUND in PATH")
@@ -265,7 +268,7 @@ def main() -> int:
 
     if args.dry_run:
         # Patch _dispatch to a no-op for dry-run
-        original = dispatcher._dispatch
+        _original = dispatcher._dispatch
         def dry(_repo, _issue):
             log.info("[dry-run] would dispatch %s#%d", _repo.url, _issue.number)
             return False

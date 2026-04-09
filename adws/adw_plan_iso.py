@@ -26,9 +26,7 @@ parallel execution without interference.
 
 import sys
 import os
-import logging
 import json
-from typing import Optional
 from dotenv import load_dotenv
 
 from adw_modules.state import ADWState
@@ -49,7 +47,7 @@ from adw_modules.workflow_ops import (
     AGENT_PLANNER,
 )
 from adw_modules.utils import setup_logger, check_env_vars
-from adw_modules.data_types import GitHubIssue, IssueClassSlashCommand, AgentTemplateRequest
+from adw_modules.data_types import GitHubIssue, AgentTemplateRequest
 from adw_modules.agent import execute_template
 from adw_modules.worktree_ops import (
     create_worktree,
