@@ -453,14 +453,34 @@ class Dispatcher:
 
         tac-7's ADWs write state to <project_root>/agents/<adw_id>/adw_state.json
         where project_root is 3 dirs up from adw_modules/state.py. When the
-        ADW is invoked from inside our cloned repo (with adws/ as a symlink
-        to tac-master's adws/), project_root resolves to the CLONE path,
-        so that's where we look.
+        ADW is invoked from inside our cloned repo (with adws/ as a physical
+        copy of tac-master's adws/ — see repo_manager._inject_substrate), that
+        copy's __file__ resolves to the clone path, so that's where we look.
+
+        T010 / T002 content guard: we distinguish three outcomes:
+          - "succeeded"  — state file exists AND has both plan_file and all_adws
+          - "incomplete" — state file exists but is missing plan_file or all_adws;
+                           this means the ADW crashed or was killed mid-flight
+                           before populating those fields. It is NOT a confirmed
+                           failure — the run may have succeeded but state was
+                           never persisted completely. Operators should inspect
+                           the clone's agents/<adw_id>/ directory for logs.
+          - "failed"     — no state file found under any candidate path; the ADW
+                           never started or exited before its first save().
+
+        @task T010
+        @epic T002
+        @why _infer_final_status was returning "failed" for states missing
+             plan_file/all_adws — a content bug masked as a confirmed failure.
+        @what Guards incomplete state files from being mis-classified as failed
+             runs by returning a distinct "incomplete" status.
         """
         adw_id = run["adw_id"]
         repo_url = run.get("repo_url", "")
 
-        # Primary: state file in the clone (where the ADW actually writes it)
+        # Primary: state file in the clone (where the ADW actually writes it).
+        # Path is identical to the ADWState.save() write path for NativeRunner
+        # (verified by T006 investigation — no mismatch for default flow).
         fs_slug = repo_url.replace("https://github.com/", "").replace(".git", "").replace("/", "_")
         clone_state = self.cfg.repos_dir / fs_slug / "agents" / adw_id / "adw_state.json"
         candidates = [clone_state]
@@ -477,6 +497,19 @@ class Dispatcher:
                     data = json.loads(state_path.read_text())
                     if data.get("plan_file") and data.get("all_adws"):
                         return "succeeded"
+                    # State file exists but required fields are absent — the ADW
+                    # likely crashed before its final save(). Return "incomplete"
+                    # rather than "failed" so callers can distinguish a partial
+                    # write from a run that truly errored out end-to-end.
+                    log.warning(
+                        "ADW %s: state file found at %s but plan_file=%r all_adws=%r — "
+                        "run appears incomplete (crashed mid-flight or never reached ship phase). "
+                        "Inspect agents/%s/ for run logs.",
+                        adw_id, state_path,
+                        data.get("plan_file"), data.get("all_adws"),
+                        adw_id,
+                    )
+                    return "incomplete"
                 except Exception:
                     continue
 
