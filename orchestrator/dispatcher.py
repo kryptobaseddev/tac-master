@@ -92,9 +92,12 @@ class Dispatcher:
         )
         self.store.mark_polled(repo.url)
 
-        # Only fetch issues that match trigger_labels (if label trigger is enabled)
-        labels = repo.trigger_labels if "label" in repo.triggers else None
-        issues = self.gh.list_open_issues(repo.url, labels=labels)
+        # Fetch ALL open issues (no server-side label filter). GitHub's
+        # `labels=a,b` parameter is AND, not OR — passing it would require
+        # issues to have every trigger label simultaneously, which is almost
+        # never what you want. _should_dispatch() does OR matching on labels
+        # client-side using `any(l in repo.trigger_labels for l in issue.labels)`.
+        issues = self.gh.list_open_issues(repo.url)
 
         dispatched = 0
         for issue in issues:
