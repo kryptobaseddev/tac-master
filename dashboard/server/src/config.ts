@@ -372,20 +372,16 @@ export async function retryIssue(
   const tacHome = process.env.TAC_MASTER_HOME ?? "/srv/tac-master";
   const opsScript = `${tacHome}/orchestrator/ops.py`;
 
-  // uv lives in the service user's home dir; it is NOT on the systemd PATH.
-  // Probe common install locations in order and fall back to PATH search.
-  const UV_CANDIDATES = [
-    "/home/krypto/.local/bin/uv",
-    "/root/.local/bin/uv",
-    "/usr/local/bin/uv",
-    "uv", // PATH fallback for local dev
-  ];
+  // ops.py uses only Python stdlib (sqlite3, json, etc.) — no third-party deps.
+  // Use plain python3 rather than `uv run` so this works under the systemd
+  // ProtectHome=read-only constraint (uv needs to write its cache dir).
+  const PYTHON_CANDIDATES = ["/usr/bin/python3", "/usr/local/bin/python3", "python3"];
   const { existsSync } = await import("node:fs");
-  const uvBin = UV_CANDIDATES.find((p) => p === "uv" || existsSync(p)) ?? "uv";
+  const pythonBin = PYTHON_CANDIDATES.find((p) => p === "python3" || existsSync(p)) ?? "python3";
 
   try {
     const proc = Bun.spawn(
-      [uvBin, "run", opsScript, "retry", String(issueNumber), repoUrl],
+      [pythonBin, opsScript, "retry", String(issueNumber), repoUrl],
       {
         cwd: tacHome,
         stdout: "pipe",
