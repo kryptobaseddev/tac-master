@@ -38,6 +38,7 @@ import {
   type RepoEntry,
 } from "./config";
 import type { HookEvent, WsMessage } from "./types";
+import { getEpics, getTasksByParent, getTaskById } from "./cleo-api";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const ALLOW_ORIGIN = process.env.CORS_ORIGIN ?? "*";
@@ -386,6 +387,43 @@ const server = Bun.serve({
         return json(result, result.ok ? 200 : 422);
       } catch (e: any) {
         return json({ ok: false, error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // ============================================================
+    // CLEO task-tree API  (T040)
+    // ============================================================
+
+    // GET /api/cleo/epics — all epics with child-task progress
+    if (url.pathname === "/api/cleo/epics" && req.method === "GET") {
+      try {
+        return json(getEpics());
+      } catch (e: any) {
+        return json({ epics: [], error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // GET /api/cleo/tasks?parent=TXXX — direct children of an epic/task
+    if (url.pathname === "/api/cleo/tasks" && req.method === "GET") {
+      const parentId = url.searchParams.get("parent");
+      if (!parentId) return json({ error: "parent query param required" }, 400);
+      try {
+        return json({ tasks: getTasksByParent(parentId) });
+      } catch (e: any) {
+        return json({ tasks: [], error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // GET /api/cleo/task/:id — single task detail
+    if (url.pathname.startsWith("/api/cleo/task/") && req.method === "GET") {
+      const id = url.pathname.replace("/api/cleo/task/", "").split("/")[0];
+      if (!id) return json({ error: "task id required" }, 400);
+      try {
+        const task = getTaskById(id);
+        if (!task) return json({ error: "not found" }, 404);
+        return json(task);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
       }
     }
 
