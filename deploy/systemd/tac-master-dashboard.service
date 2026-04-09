@@ -22,7 +22,14 @@ Restart=always
 RestartSec=5
 TimeoutStopSec=20
 
-NoNewPrivileges=true
+# NoNewPrivileges intentionally OMITTED from the dashboard unit.
+# The dashboard exposes POST /api/system/restart-daemon which runs
+# `sudo -n systemctl restart tac-master` via a narrow NOPASSWD sudoers
+# rule (/etc/sudoers.d/tac-master). NoNewPrivileges=true would block
+# that escalation. The sudoers rule is locked to just the three
+# tac-master systemctl commands, so the effective blast radius is
+# bounded to restarting tac-master's own units — not privilege
+# escalation in any meaningful sense.
 ProtectSystem=full
 ProtectHome=read-only
 ReadWritePaths=/srv/tac-master
