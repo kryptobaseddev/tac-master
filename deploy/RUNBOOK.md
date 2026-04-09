@@ -311,13 +311,40 @@ If these lines are missing (e.g., after a botched merge), restore them and resta
 
 ## Failure Mode 4 — Substrate Staleness (fix doesn't propagate to clones)
 
+> **[T002/T010/T014 resolved — 2026-04-09]** Manual clone deletion is no longer required.
+> `RepoManager.sync()` performs a full, unconditional re-copy of all substrate directories
+> (`adws/`, `.claude/`, `ai_docs/`) on every dispatch. Substrate changes deployed via
+> `tac-update.sh` propagate automatically to existing clones on the next run without any
+> manual `rm -rf` intervention. The workaround below is kept for historical reference only.
+
 ### Symptom
 
 A bug fix or configuration change was merged to `main` of the tac-master repo. After the fix, new runs still exhibit the old behavior. The daemon logs show runs starting and completing, but the output reflects code from before the fix.
 
-**Root cause:** Each dispatch creates a git worktree clone under `/srv/tac-master/repos/<owner>_<repo>/trees/<adw_id>/`. The clone's `adws/`, `.claude/`, and `ai_docs/` directories are injected at clone time from the substrate at `/srv/tac-master/adws/` etc. If the substrate itself was not updated (e.g., `git pull` was not run, or the update script was not executed), the clones inherit stale code.
+**Root cause (historical):** Previously, substrate injection was done with symlinks. Symlinks
+were only created at clone time, so changes to the substrate source did not propagate to
+existing clones. The fix (commit `82ec54a`, deployed 2026-04-09) replaced symlinks with an
+unconditional `shutil.copytree` on every `sync()` call — see `orchestrator/repo_manager.py`
+`_inject_substrate` (FRESHNESS NOTE). **No freshness check exists that could short-circuit
+this re-copy**, so existing clones always receive the latest substrate on the next dispatch.
 
-### Reproduce
+### How substrate propagation now works
+
+`RepoManager.sync()` always calls `_inject_substrate()`, which:
+1. `shutil.rmtree(dst)` — removes the stale copy in the clone
+2. `shutil.copytree(src, dst)` — copies the current source substrate into the clone
+
+This means: after running `tac-update.sh`, the next dispatch for any repo automatically gets
+the updated substrate. No clone deletion is needed.
+
+To verify propagation is working, run the integration test script:
+
+```bash
+sudo -u krypto bash -lc 'cd /srv/tac-master && bash scripts/test_substrate_freshness.sh'
+# Should print: [PASS] Canary found in clone after sync(). Substrate re-copy is working.
+```
+
+### Reproduce (if staleness is still suspected)
 
 ```bash
 # Check the current HEAD of the deployed repo
@@ -334,14 +361,15 @@ For an existing clone, check the injected substrate version:
 # Find a recent clone
 ls -lt /srv/tac-master/repos/ | head -5
 
-# Check the adws version inside the clone
-cat /srv/tac-master/repos/<owner>_<repo>/trees/<adw_id>/adws/adw_modules/agent.py | head -20
-# Compare a known fixed line (e.g., stdin=subprocess.DEVNULL)
+# Check the adws version inside the clone (compare against source)
+diff /srv/tac-master/adws/adw_modules/agent.py \
+     /srv/tac-master/repos/<owner>_<repo>/adws/adw_modules/agent.py
+# If diff is empty, clone is up to date
 ```
 
 ### Recovery
 
-1. Pull the latest code:
+1. Pull the latest code (this is the only step required):
 
    ```bash
    sudo bash /srv/tac-master/scripts/tac-update.sh update
@@ -355,19 +383,15 @@ cat /srv/tac-master/repos/<owner>_<repo>/trees/<adw_id>/adws/adw_modules/agent.p
    systemctl restart tac-master tac-master-webhook tac-master-dashboard
    ```
 
-2. Delete stale clones so the next dispatch gets fresh substrate injection:
+2. The next dispatch will automatically receive the updated substrate. No clone deletion needed.
 
-   ```bash
-   # Delete a specific stale clone
-   rm -rf /srv/tac-master/repos/<owner>_<repo>/
+3. Verify by triggering a new run and confirming the fixed behavior appears. Optionally confirm
+   with the freshness test script (see above).
 
-   # Delete ALL clones (safe — they are recreated on next dispatch)
-   rm -rf /srv/tac-master/repos/*/
-   ```
-
-3. Verify by triggering a new run and confirming the fixed behavior appears.
-
-**Note:** Task T002 is implementing a permanent fix that will detect and invalidate stale clones automatically. Until that ships, manual clone deletion is the recovery path after any substrate change.
+> **[HISTORICAL WORKAROUND — no longer needed]** Previously this section instructed operators
+> to delete stale clones with `rm -rf /srv/tac-master/repos/*/`. That workaround is no longer
+> required or recommended. The unconditional re-copy in `_inject_substrate` handles this
+> automatically. See T002/T010/T014 for the full investigation and fix history.
 
 ---
 
