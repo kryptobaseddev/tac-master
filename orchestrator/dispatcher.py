@@ -166,10 +166,14 @@ class Dispatcher:
         # Allocate ADW ID (8 hex chars, matching tac-7 format)
         adw_id = secrets.token_hex(4)
 
-        # Pre-create the worktree (optional — tac-7 ADWs can create their own,
-        # but pre-creating lets us inject substrate before the ADW boots.
-        # Passing branch_name=None lets the ADW rename after classification.)
-        wt_path = self.repo_mgr.create_worktree(handle, adw_id)
+        # NOTE: we do NOT pre-create the worktree here. The tac-7 ADW's
+        # own worktree_ops.create_worktree() computes project_root relative
+        # to the ADW script's __file__ and expects worktrees at
+        # <clone>/trees/<adw_id>/. Creating them elsewhere and symlinking
+        # confuses git's worktree tracking and causes validate_worktree
+        # to fail. Let the ADW handle it natively — we just track the
+        # path after the fact in reap_finished_runs.
+        wt_path = handle.clone_path / "trees" / adw_id
 
         self.store.create_run(adw_id, repo.url, issue.number, workflow, repo.model_set)
         self.store.update_run(adw_id, worktree_path=str(wt_path), status="running")
@@ -351,20 +355,37 @@ class Dispatcher:
         )
 
     def _infer_final_status(self, run: dict) -> str:
-        """Peek at the ADW's state.json to see if it reached the ship phase."""
+        """Peek at the ADW's state.json to see if it reached the ship phase.
+
+        tac-7's ADWs write state to <project_root>/agents/<adw_id>/adw_state.json
+        where project_root is 3 dirs up from adw_modules/state.py. When the
+        ADW is invoked from inside our cloned repo (with adws/ as a symlink
+        to tac-master's adws/), project_root resolves to the CLONE path,
+        so that's where we look.
+        """
+        adw_id = run["adw_id"]
+        repo_url = run.get("repo_url", "")
+
+        # Primary: state file in the clone (where the ADW actually writes it)
+        fs_slug = repo_url.replace("https://github.com/", "").replace(".git", "").replace("/", "_")
+        clone_state = self.cfg.repos_dir / fs_slug / "agents" / adw_id / "adw_state.json"
+        candidates = [clone_state]
+
+        # Legacy: older runs may have state under the worktree path
         wt = run.get("worktree_path")
-        if not wt:
-            return "failed"
-        state_path = Path(wt) / "agents" / run["adw_id"] / "adw_state.json"
-        if not state_path.exists():
-            return "failed"
-        try:
-            data = json.loads(state_path.read_text())
-            # Presence of all expected phase artifacts → succeeded
-            if data.get("plan_file") and data.get("all_adws"):
-                return "succeeded"
-        except Exception:
-            pass
+        if wt:
+            candidates.append(Path(wt) / "agents" / adw_id / "adw_state.json")
+            candidates.append(Path(wt).parent.parent / "agents" / adw_id / "adw_state.json")
+
+        for state_path in candidates:
+            if state_path.exists():
+                try:
+                    data = json.loads(state_path.read_text())
+                    if data.get("plan_file") and data.get("all_adws"):
+                        return "succeeded"
+                except Exception:
+                    continue
+
         return "failed"
 
 

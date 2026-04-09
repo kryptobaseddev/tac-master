@@ -105,61 +105,11 @@ class RepoManager:
     # Worktree lifecycle
     # ------------------------------------------------------------------
 
-    def create_worktree(self, handle: RepoHandle, adw_id: str,
-                        branch_name: str | None = None) -> Path:
-        """Create a fresh worktree for an ADW run.
-
-        Worktree path is <home>/trees/<fs_slug>__<adw_id>/. This lives OUTSIDE
-        the clone's tree/ dir so multiple concurrent runs don't collide with
-        the ADW's own tree/ directory expectations (tac-7 puts worktrees at
-        <clone>/trees/<adw_id>/ — we pre-create ours at tac-master's top-level
-        trees/ and symlink them into place).
-        """
-        wt_name = f"{handle.fs_slug}__{adw_id}"
-        wt_path = self.trees_dir / wt_name
-        if wt_path.exists():
-            log.info("Worktree already exists: %s", wt_path)
-            return wt_path
-
-        # Create from origin/main (or origin/master as fallback)
-        base = self._default_branch(handle)
-        branch = branch_name or f"tac/{adw_id}"
-
-        log.info("Creating worktree %s from %s/%s", wt_path, handle.slug, base)
-        subprocess.run(
-            [
-                "git", "-C", str(handle.clone_path),
-                "worktree", "add", "-b", branch, str(wt_path), f"origin/{base}",
-            ],
-            check=True,
-            env=self._git_env(),
-        )
-
-        # Inject substrate into the worktree too
-        self._inject_substrate(wt_path)
-
-        # ALSO symlink wt_path into the clone's tree/ directory so tac-7 ADWs
-        # that expect <clone>/trees/<adw_id>/ find it.
-        tac7_trees_dir = handle.clone_path / "trees"
-        tac7_trees_dir.mkdir(exist_ok=True)
-        tac7_symlink = tac7_trees_dir / adw_id
-        if not tac7_symlink.exists():
-            tac7_symlink.symlink_to(wt_path, target_is_directory=True)
-
-        return wt_path
-
     def cleanup_worktree(self, handle: RepoHandle, adw_id: str,
                          delete_branch: bool = False) -> None:
-        """Remove a worktree and optionally its feature branch."""
-        wt_name = f"{handle.fs_slug}__{adw_id}"
-        wt_path = self.trees_dir / wt_name
-
-        # Remove tac-7-style symlink first
-        tac7_symlink = handle.clone_path / "trees" / adw_id
-        if tac7_symlink.is_symlink():
-            tac7_symlink.unlink()
-
-        if wt_path.exists():
+        """Remove a worktree that the ADW created at <clone>/trees/<adw_id>/."""
+        wt_path = handle.clone_path / "trees" / adw_id
+        if wt_path.exists() or wt_path.is_symlink():
             log.info("Removing worktree %s", wt_path)
             subprocess.run(
                 ["git", "-C", str(handle.clone_path),
@@ -169,11 +119,12 @@ class RepoManager:
             )
             if wt_path.exists():
                 shutil.rmtree(wt_path, ignore_errors=True)
+            elif wt_path.is_symlink():
+                wt_path.unlink()
 
         if delete_branch:
-            branch = f"tac/{adw_id}"
             subprocess.run(
-                ["git", "-C", str(handle.clone_path), "branch", "-D", branch],
+                ["git", "-C", str(handle.clone_path), "branch", "-D", f"tac/{adw_id}"],
                 check=False,
                 env=self._git_env(),
             )
