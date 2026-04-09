@@ -27,7 +27,8 @@ log "Installing OS packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y --no-install-recommends \
-    ca-certificates curl git jq sqlite3 build-essential \
+    ca-certificates curl wget git jq sqlite3 build-essential \
+    unzip                                       `# needed by bun installer` \
     python3 python3-venv python3-pip \
     sudo systemd procps \
     xdg-utils                                   `# claude code runtime dep` \
