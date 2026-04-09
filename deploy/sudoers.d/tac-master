@@ -1,0 +1,16 @@
+# Allow the krypto service user to restart tac-master's own systemd units
+# without a password. This is used by the dashboard server's
+# POST /api/system/restart-daemon endpoint.
+#
+# Scope is deliberately narrow: only the three tac-master units and only
+# `restart` + `status`. Nothing else.
+#
+# Installed at /etc/sudoers.d/tac-master by deploy/install.sh with chmod 440.
+
+krypto ALL=(root) NOPASSWD: /usr/bin/systemctl restart tac-master
+krypto ALL=(root) NOPASSWD: /usr/bin/systemctl restart tac-master.service
+krypto ALL=(root) NOPASSWD: /usr/bin/systemctl restart tac-master-webhook
+krypto ALL=(root) NOPASSWD: /usr/bin/systemctl restart tac-master-webhook.service
+krypto ALL=(root) NOPASSWD: /usr/bin/systemctl status tac-master
+krypto ALL=(root) NOPASSWD: /usr/bin/systemctl status tac-master-webhook
+krypto ALL=(root) NOPASSWD: /usr/bin/systemctl status tac-master-dashboard

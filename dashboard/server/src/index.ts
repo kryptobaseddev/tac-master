@@ -20,6 +20,22 @@ import {
   getActiveAndRecentRuns,
   getLessons,
 } from "./db";
+import {
+  getReposConfig,
+  saveReposConfig,
+  addRepoEntry,
+  updateRepoEntry,
+  deleteRepoEntry,
+  getBudgetsConfig,
+  saveBudgetsConfig,
+  getPoliciesConfig,
+  savePoliciesConfig,
+  getModelPricesConfig,
+  saveModelPricesConfig,
+  probeGitHubRepo,
+  restartDaemon,
+  type RepoEntry,
+} from "./config";
 import type { HookEvent, WsMessage } from "./types";
 
 const PORT = Number(process.env.PORT ?? 4000);
@@ -191,6 +207,155 @@ const server = Bun.serve({
     if (url.pathname === "/api/lessons" && req.method === "GET") {
       const limit = Number(url.searchParams.get("limit") ?? 20);
       return json({ lessons: getLessons(limit) });
+    }
+
+    // ============================================================
+    // Config CRUD — YAML read/write with daemon restart support
+    // ============================================================
+
+    // GET /api/config/repos
+    if (url.pathname === "/api/config/repos" && req.method === "GET") {
+      try {
+        return json(getReposConfig());
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // PUT /api/config/repos — replace entire repos.yaml (full-object save)
+    if (url.pathname === "/api/config/repos" && req.method === "PUT") {
+      try {
+        const body = (await req.json()) as any;
+        saveReposConfig(body);
+        return json({ ok: true, repos: body.repos?.length ?? 0 });
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 400);
+      }
+    }
+
+    // POST /api/config/repos — add a single new repo entry
+    if (url.pathname === "/api/config/repos" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as RepoEntry;
+        if (!body.url) return json({ error: "url is required" }, 400);
+        const updated = addRepoEntry(body);
+        return json({ ok: true, repos: updated.repos }, 201);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 400);
+      }
+    }
+
+    // PATCH /api/config/repos?url=... — update a single repo's fields
+    if (url.pathname === "/api/config/repos" && req.method === "PATCH") {
+      try {
+        const target = url.searchParams.get("url");
+        if (!target) return json({ error: "url query param required" }, 400);
+        const body = (await req.json()) as Partial<RepoEntry>;
+        const updated = updateRepoEntry(target, body);
+        return json({ ok: true, repos: updated.repos });
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 400);
+      }
+    }
+
+    // DELETE /api/config/repos?url=... — remove a repo
+    if (url.pathname === "/api/config/repos" && req.method === "DELETE") {
+      try {
+        const target = url.searchParams.get("url");
+        if (!target) return json({ error: "url query param required" }, 400);
+        const updated = deleteRepoEntry(target);
+        return json({ ok: true, repos: updated.repos });
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 400);
+      }
+    }
+
+    // GET /api/config/budgets
+    if (url.pathname === "/api/config/budgets" && req.method === "GET") {
+      try {
+        return json(getBudgetsConfig());
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // PUT /api/config/budgets — full-object save
+    if (url.pathname === "/api/config/budgets" && req.method === "PUT") {
+      try {
+        const body = (await req.json()) as any;
+        saveBudgetsConfig(body);
+        return json({ ok: true });
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 400);
+      }
+    }
+
+    // GET /api/config/policies
+    if (url.pathname === "/api/config/policies" && req.method === "GET") {
+      try {
+        return json(getPoliciesConfig());
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // PUT /api/config/policies
+    if (url.pathname === "/api/config/policies" && req.method === "PUT") {
+      try {
+        const body = (await req.json()) as any;
+        savePoliciesConfig(body);
+        return json({ ok: true });
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 400);
+      }
+    }
+
+    // GET /api/config/model-prices
+    if (url.pathname === "/api/config/model-prices" && req.method === "GET") {
+      try {
+        return json(getModelPricesConfig());
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // PUT /api/config/model-prices
+    if (url.pathname === "/api/config/model-prices" && req.method === "PUT") {
+      try {
+        const body = (await req.json()) as any;
+        saveModelPricesConfig(body);
+        return json({ ok: true });
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 400);
+      }
+    }
+
+    // GET /api/github/repo-info?url=...
+    if (url.pathname === "/api/github/repo-info" && req.method === "GET") {
+      const target = url.searchParams.get("url");
+      if (!target) return json({ error: "url query param required" }, 400);
+      try {
+        const result = await probeGitHubRepo(target);
+        return json(result);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 400);
+      }
+    }
+
+    // POST /api/system/restart-daemon — reloads the tac-master daemon
+    // (applies config changes). Requires NOPASSWD sudoers rule for
+    // `sudo -n systemctl restart tac-master`.
+    if (url.pathname === "/api/system/restart-daemon" && req.method === "POST") {
+      try {
+        const body = req.body
+          ? ((await req.json().catch(() => ({}))) as { service?: string })
+          : {};
+        const service = body.service ?? "tac-master";
+        const result = await restartDaemon(service);
+        return json(result, result.ok ? 200 : 500);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
     }
 
     // --- Static client (Vue SPA) ---

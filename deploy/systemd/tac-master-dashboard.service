@@ -9,7 +9,11 @@ Type=simple
 User=krypto
 Group=krypto
 WorkingDirectory=/srv/tac-master/dashboard/server
+# Load GITHUB_PAT so the /api/github/repo-info endpoint can probe
+# private repos the bot has access to
+EnvironmentFile=-/srv/tac-master/config/identity.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/krypto/.bun/bin
+Environment=TAC_MASTER_HOME=/srv/tac-master
 Environment=TAC_MASTER_DB=/srv/tac-master/state/tac_master.sqlite
 Environment=TAC_DASHBOARD_DB=/srv/tac-master/state/dashboard.sqlite
 Environment=PORT=4000

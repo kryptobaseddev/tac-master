@@ -237,6 +237,19 @@ systemctl enable tac-master.service
 systemctl enable tac-master-webhook.service
 systemctl enable tac-master-dashboard.service
 
+# ---- Install sudoers rule for dashboard-triggered daemon restarts ----
+# The dashboard UI has a "Restart Daemon" button that executes
+# `sudo -n systemctl restart tac-master` as the krypto user. This rule
+# grants the narrowly-scoped NOPASSWD permission. Validated with visudo
+# before install.
+log "Installing sudoers rule for tac-master..."
+if visudo -c -f deploy/sudoers.d/tac-master >/dev/null 2>&1; then
+    install -m 0440 -o root -g root deploy/sudoers.d/tac-master /etc/sudoers.d/tac-master
+    log "  sudoers rule installed — krypto can restart tac-master{,-webhook}.service"
+else
+    log "  ⚠ sudoers file failed visudo validation; NOT installing"
+fi
+
 log ""
 log "Installation complete."
 log ""

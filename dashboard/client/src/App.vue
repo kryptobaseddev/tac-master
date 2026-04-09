@@ -4,10 +4,18 @@ import { useWebSocket } from "./composables/useWebSocket";
 import RepoStatusBoard from "./components/RepoStatusBoard.vue";
 import RunsPanel from "./components/RunsPanel.vue";
 import EventStream from "./components/EventStream.vue";
+import ConfigPage from "./components/ConfigPage.vue";
 
-const wsUrl = import.meta.env.VITE_WS_URL ?? "ws://localhost:4000/stream";
+// Derive WebSocket URL from the current browser location so it works
+// whether the user visits http://localhost:4000, http://10.0.10.22:4000,
+// or through a reverse proxy. Falls back to VITE_WS_URL env if set.
+const wsUrl =
+  (import.meta.env.VITE_WS_URL as string | undefined) ??
+  `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/stream`;
 const { events, runs, repos, isConnected, error } = useWebSocket(wsUrl);
 
+type Tab = "dashboard" | "config";
+const activeTab = ref<Tab>("dashboard");
 const selectedRepo = ref<string | null>(null);
 
 const liveRuns = computed(
@@ -38,7 +46,7 @@ function fmtTokens(t: number): string {
     <header
       class="flex items-center justify-between px-5 py-3 border-b border-ink-800 bg-ink-900"
     >
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-4">
         <div class="text-lg font-bold text-ink-100">
           <span class="text-accent-self">tac-</span>master
         </div>
@@ -51,6 +59,30 @@ function fmtTokens(t: number): string {
         <span class="text-[11px] text-ink-400">
           {{ isConnected ? "connected" : "reconnecting…" }}
         </span>
+        <nav class="ml-4 flex gap-1">
+          <button
+            @click="activeTab = 'dashboard'"
+            :class="[
+              'px-3 py-1 rounded text-[11px] uppercase tracking-wider transition',
+              activeTab === 'dashboard'
+                ? 'bg-ink-800 text-ink-100'
+                : 'text-ink-400 hover:text-ink-100',
+            ]"
+          >
+            Dashboard
+          </button>
+          <button
+            @click="activeTab = 'config'"
+            :class="[
+              'px-3 py-1 rounded text-[11px] uppercase tracking-wider transition',
+              activeTab === 'config'
+                ? 'bg-ink-800 text-ink-100'
+                : 'text-ink-400 hover:text-ink-100',
+            ]"
+          >
+            Config
+          </button>
+        </nav>
       </div>
       <div class="flex items-center gap-5 text-[11px]">
         <div>
@@ -84,22 +116,26 @@ function fmtTokens(t: number): string {
       {{ error }}
     </div>
 
-    <!-- Main 3-section layout -->
+    <!-- Main content area — switches between dashboard and config -->
     <main class="flex-1 flex overflow-hidden">
-      <!-- Left: repos board + runs -->
-      <aside class="w-[540px] shrink-0 border-r border-ink-800 overflow-auto">
-        <RepoStatusBoard
-          :repos="repos"
-          :selected-repo="selectedRepo"
-          @select="selectedRepo = $event"
-        />
-        <RunsPanel :runs="runs" :selected-repo="selectedRepo" />
-      </aside>
-
-      <!-- Right: event stream -->
-      <div class="flex-1 overflow-hidden">
-        <EventStream :events="events" :selected-repo="selectedRepo" />
-      </div>
+      <template v-if="activeTab === 'dashboard'">
+        <!-- Left: repos board + runs -->
+        <aside class="w-[540px] shrink-0 border-r border-ink-800 overflow-auto">
+          <RepoStatusBoard
+            :repos="repos"
+            :selected-repo="selectedRepo"
+            @select="selectedRepo = $event"
+          />
+          <RunsPanel :runs="runs" :selected-repo="selectedRepo" />
+        </aside>
+        <!-- Right: event stream -->
+        <div class="flex-1 overflow-hidden">
+          <EventStream :events="events" :selected-repo="selectedRepo" />
+        </div>
+      </template>
+      <template v-else>
+        <ConfigPage class="flex-1 overflow-auto" />
+      </template>
     </main>
   </div>
 </template>
