@@ -344,14 +344,24 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
     try:
         # Open output file for streaming
         with open(request.output_file, "w") as output_f:
-            # Execute Claude Code and stream output to file
+            # Execute Claude Code and stream output to file.
+            # CRITICAL: merge stderr into stdout to avoid the classic pipe-buffer
+            # deadlock. With `stderr=subprocess.PIPE`, subprocess.run does NOT
+            # actively drain stderr — it reads it only AFTER the child exits.
+            # Claude Code with --verbose --output-format stream-json emits enough
+            # stderr output to fill the 64KB kernel pipe buffer, at which point
+            # claude blocks on write() forever and we wait on it forever. Tests
+            # showed runs hanging at 0% CPU after ~2-5 minutes.
+            # Merging stderr into stdout routes both streams to the output file,
+            # which has no buffer limit, eliminating the deadlock entirely.
             result = subprocess.run(
                 cmd,
                 stdout=output_f,  # Stream directly to file
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Was PIPE — caused deadlock (see above)
                 text=True,
                 env=env,
                 cwd=request.working_dir,  # Use working_dir if provided
+                timeout=15 * 60,  # Belt-and-suspenders: 15 min hard cap per call
             )
 
         if result.returncode == 0:
@@ -429,8 +439,10 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
                     retry_code=RetryCode.NONE,
                 )
         else:
-            # Error occurred - stderr is captured, stdout went to file
-            stderr_msg = result.stderr.strip() if result.stderr else ""
+            # Error occurred - both stderr and stdout are now in the output file
+            # (merged) since we set stderr=subprocess.STDOUT above to prevent
+            # the pipe-buffer deadlock. result.stderr is None now.
+            stderr_msg = ""
 
             # Try to read the output file to check for errors in stdout
             stdout_msg = ""
