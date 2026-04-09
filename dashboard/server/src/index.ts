@@ -2,10 +2,15 @@
  * tac-master dashboard server.
  *
  * Bun HTTP + WebSocket server. Ingests hook events via POST /events,
- * broadcasts to connected clients over ws://host:4000/stream, and exposes
- * read-only views over the orchestrator's SQLite state store.
+ * broadcasts to connected clients over ws://host:4000/stream, exposes
+ * read-only views over the orchestrator's SQLite state store, and serves
+ * the built Vue client as static assets at /.
+ *
+ * Access the dashboard at http://<host>:4000/ once the client is built.
  */
 
+import { join, resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
 import {
   initDatabase,
   insertEvent,
@@ -19,6 +24,62 @@ import type { HookEvent, WsMessage } from "./types";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const ALLOW_ORIGIN = process.env.CORS_ORIGIN ?? "*";
+
+// Locate the client dist/ directory. First try the sibling client/dist
+// (for dev runs), then the container layout, then bail and serve a
+// "client not built" fallback.
+const CLIENT_DIST_CANDIDATES = [
+  resolve(import.meta.dir, "..", "..", "client", "dist"),
+  resolve(import.meta.dir, "..", "..", "..", "dashboard", "client", "dist"),
+  "/srv/tac-master/dashboard/client/dist",
+];
+const CLIENT_DIST =
+  CLIENT_DIST_CANDIDATES.find((p) => existsSync(p) && statSync(p).isDirectory()) ?? null;
+
+if (CLIENT_DIST) {
+  console.log(`[tac-master dashboard] serving client from ${CLIENT_DIST}`);
+} else {
+  console.log(
+    `[tac-master dashboard] client not built — '/' will serve a fallback page.\n` +
+      `  Build with: cd dashboard/client && npm install --legacy-peer-deps && npm run build`,
+  );
+}
+
+const FALLBACK_HTML = `<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>tac-master</title>
+    <style>
+      body { font-family: ui-monospace, Menlo, Consolas, monospace;
+             background: #12171e; color: #e4e7eb; padding: 3rem;
+             max-width: 720px; margin: 0 auto; line-height: 1.55; }
+      a { color: #3b82f6; }
+      h1 { color: #a855f7; }
+      code { background: #1f2933; padding: 0.15rem 0.4rem; border-radius: 3px; }
+      .ok { color: #10b981; }
+      .warn { color: #f59e0b; }
+    </style>
+  </head>
+  <body>
+    <h1>tac-master dashboard</h1>
+    <p class="ok">✓ API server running on this port.</p>
+    <p class="warn">⚠ Client bundle not found. Build it with:</p>
+    <pre><code>pct enter &lt;CTID&gt;
+cd /srv/tac-master/dashboard/client
+sudo -u krypto npm install --legacy-peer-deps
+sudo -u krypto npm run build
+systemctl restart tac-master-dashboard</code></pre>
+    <h2>API endpoints</h2>
+    <ul>
+      <li><a href="/health">GET /health</a></li>
+      <li><a href="/api/repos">GET /api/repos</a></li>
+      <li><a href="/api/runs">GET /api/runs</a></li>
+      <li><a href="/api/lessons">GET /api/lessons</a></li>
+      <li><a href="/events/recent">GET /events/recent</a></li>
+      <li><a href="/events/filter-options">GET /events/filter-options</a></li>
+      <li>WebSocket: <code>ws://&lt;host&gt;:4000/stream</code></li>
+    </ul>
+  </body>
+</html>`;
 
 initDatabase();
 
@@ -130,6 +191,31 @@ const server = Bun.serve({
     if (url.pathname === "/api/lessons" && req.method === "GET") {
       const limit = Number(url.searchParams.get("limit") ?? 20);
       return json({ lessons: getLessons(limit) });
+    }
+
+    // --- Static client (Vue SPA) ---
+    if (req.method === "GET") {
+      if (CLIENT_DIST) {
+        // Default to index.html for /, otherwise try the requested path
+        const relPath = url.pathname === "/" ? "/index.html" : url.pathname;
+        const filePath = join(CLIENT_DIST, relPath);
+        const file = Bun.file(filePath);
+        if (await file.exists()) {
+          return new Response(file);
+        }
+        // SPA fallback: unknown routes serve index.html so client-side routing works
+        const indexFile = Bun.file(join(CLIENT_DIST, "index.html"));
+        if (await indexFile.exists()) {
+          return new Response(indexFile, {
+            headers: { "Content-Type": "text/html" },
+          });
+        }
+      }
+      if (url.pathname === "/") {
+        return new Response(FALLBACK_HTML, {
+          headers: { "Content-Type": "text/html", ...CORS_HEADERS },
+        });
+      }
     }
 
     return new Response("Not found", { status: 404, headers: CORS_HEADERS });

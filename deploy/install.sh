@@ -208,12 +208,15 @@ else
 fi
 
 # ---- Build the dashboard client (optional; warn on failure) ----
+# Uses --legacy-peer-deps as a safety net in case vite/plugin-vue peer deps
+# drift again in future versions. The fallback behavior on build failure
+# is that the Bun server serves a helpful "client not built" page at /.
 if [[ -d "$TAC_HOME/dashboard/client" ]]; then
     log "Installing dashboard client dependencies..."
-    if sudo -u "$TAC_USER" bash -lc "cd $TAC_HOME/dashboard/client && npm install && npm run build"; then
+    if sudo -u "$TAC_USER" bash -lc "cd $TAC_HOME/dashboard/client && npm install --legacy-peer-deps && npm run build"; then
         log "Dashboard client built → $TAC_HOME/dashboard/client/dist"
     else
-        log "Dashboard client build failed (non-fatal; can run via 'npm run dev')"
+        log "Dashboard client build failed (non-fatal; server still serves API at :4000)"
     fi
 fi
 
