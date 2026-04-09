@@ -8,7 +8,12 @@ How it works
 ------------
 The tac-7 ADWs write every Claude Code invocation's raw output to:
 
-    <worktree>/agents/<adw_id>/<agent_name>/cc_raw_output.jsonl
+    <repo_root>/agents/<adw_id>/<agent_name>/raw_output.jsonl
+
+where <repo_root> is the repository checkout directory (e.g.
+/srv/tac-master/repos/<slug>/).  The worktree used for git operations
+lives at <repo_root>/trees/<adw_id>/ — two levels below repo_root —
+so repo_root can be derived as worktree_path.parent.parent.
 
 Each line is a JSON object from the Claude Code stream. Messages of type
 "assistant" carry a `message.usage` block with input/output/cache tokens,
@@ -264,16 +269,35 @@ class TokenTracker:
 
     # ------------------------------------------------------------------
     def discover_phase_files(self, worktree_path: Path, adw_id: str) -> list[PhaseAttribution]:
-        """Find every cc_raw_output.jsonl under agents/<adw_id>/*/ and parse it."""
-        root = worktree_path / "agents" / adw_id
+        """Find every raw_output.jsonl under <repo_root>/agents/<adw_id>/*/ and parse it.
+
+        Fix T032 (see T029 audit): the writer (adws/adw_modules/agent.py:554-560)
+        stores files at <repo_root>/agents/<adw_id>/<agent_name>/raw_output.jsonl,
+        where repo_root is 3 levels up from agent.py (i.e. the repository checkout
+        root, NOT the git worktree).  The worktree lives at
+        <repo_root>/trees/<adw_id>/, so repo_root = worktree_path.parent.parent.
+
+        Two bugs fixed here:
+          1. Filename: was "cc_raw_output.jsonl", now "raw_output.jsonl"
+          2. Base dir: was worktree_path/"agents"/adw_id,
+                       now  repo_root/"agents"/adw_id
+        """
+        # Derive repo_root from worktree_path.
+        # New-style worktree:  <repo_root>/trees/<adw_id>/
+        # Old-style worktree:  /srv/tac-master/trees/<slug>__<adw_id>/  (no agents dir)
+        # Going up two levels gives repo_root for new-style paths.
+        repo_root = worktree_path.parent.parent
+        root = repo_root / "agents" / adw_id
         if not root.exists():
+            log.debug("No agents dir at %s for adw=%s (worktree=%s)",
+                      root, adw_id, worktree_path)
             return []
 
         out: list[PhaseAttribution] = []
         for agent_dir in sorted(root.iterdir()):
             if not agent_dir.is_dir():
                 continue
-            for jsonl in agent_dir.glob("**/cc_raw_output.jsonl"):
+            for jsonl in agent_dir.glob("**/raw_output.jsonl"):
                 usage = parse_jsonl_file(jsonl)
                 out.append(PhaseAttribution(
                     phase_name=agent_dir.name,
