@@ -135,6 +135,25 @@ fi
 # Also verify krypto can run it (after user creation below — see doctor)
 # Doctor will re-verify as the service user before starting.
 
+# ---- Create service user FIRST (needed for all the per-user installs below) ----
+if ! id "$TAC_USER" >/dev/null 2>&1; then
+    log "Creating user $TAC_USER..."
+    useradd --system --create-home --shell /bin/bash "$TAC_USER"
+    ok "User $TAC_USER created ($(getent passwd "$TAC_USER" | cut -d: -f6))"
+fi
+
+# ---- Install uv for the service user ----
+if ! sudo -u "$TAC_USER" bash -lc 'command -v uv' >/dev/null 2>&1; then
+    log "Installing uv for $TAC_USER..."
+    sudo -u "$TAC_USER" bash -lc 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+fi
+
+# ---- Bun (for dashboard server) ----
+if ! sudo -u "$TAC_USER" bash -lc 'command -v bun' >/dev/null 2>&1; then
+    log "Installing Bun for $TAC_USER..."
+    sudo -u "$TAC_USER" bash -lc 'curl -fsSL https://bun.sh/install | bash'
+fi
+
 # ---- Playwright browsers (Chromium for the review phase) ----
 # tac-master's review phase uses Playwright via MCP to take screenshots
 # and verify UI changes. Install Chromium with bundled deps. This is
@@ -146,24 +165,6 @@ if ! sudo -u "$TAC_USER" bash -lc 'test -d ~/.cache/ms-playwright' >/dev/null 2>
         || log "⚠ Playwright chromium install failed (review phase will be degraded; fix manually)"
 else
     log "✓ Playwright chromium cache already present"
-fi
-
-# ---- Bun (for dashboard server) ----
-if ! sudo -u "$TAC_USER" bash -lc 'command -v bun' >/dev/null 2>&1; then
-    log "Installing Bun for $TAC_USER..."
-    sudo -u "$TAC_USER" bash -lc 'curl -fsSL https://bun.sh/install | bash'
-fi
-
-# ---- Create service user ----
-if ! id "$TAC_USER" >/dev/null 2>&1; then
-    log "Creating user $TAC_USER..."
-    useradd --system --create-home --shell /bin/bash "$TAC_USER"
-fi
-
-# ---- Install uv for the service user ----
-if ! sudo -u "$TAC_USER" bash -lc 'command -v uv' >/dev/null 2>&1; then
-    log "Installing uv for $TAC_USER..."
-    sudo -u "$TAC_USER" bash -lc 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 fi
 
 # ---- Clone or update tac-master ----
