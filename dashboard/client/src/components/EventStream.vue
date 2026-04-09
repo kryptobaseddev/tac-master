@@ -177,8 +177,22 @@ function getEventData(event: EventStreamEntry) {
       metadata: event.metadata,
     };
   }
-  // EventStreamEntry metadata contains the original event for other types
-  return event.metadata?.originalEvent || event;
+  // EventStreamEntry metadata contains the original AgentLog for other types.
+  // T033: merge EventStreamEntry.metadata (phase, repo_url, adw_id) into the
+  // AgentLog so AgentLogRow can render phase badges and repo chips per row.
+  const originalEvent = event.metadata?.originalEvent || event;
+  if (event.metadata && originalEvent !== event) {
+    return {
+      ...originalEvent,
+      metadata: {
+        ...(originalEvent.metadata ?? {}),
+        phase: event.metadata.phase ?? originalEvent.metadata?.phase,
+        repo_url: event.metadata.repo_url ?? originalEvent.metadata?.repo_url,
+        adw_id: event.metadata.adw_id ?? originalEvent.metadata?.adw_id,
+      },
+    };
+  }
+  return originalEvent;
 }
 
 // Refs

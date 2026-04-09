@@ -132,7 +132,8 @@ export interface Prompt {
 // AGENT_LOG TYPE
 // ═══════════════════════════════════════════════════════════
 
-export type EventCategory = 'hook' | 'response'
+// T033: added "tool" category so PreToolUse/PostToolUse counters don't inflate HOOK
+export type EventCategory = 'hook' | 'response' | 'tool'
 
 // File tracking types
 export interface FileChange {

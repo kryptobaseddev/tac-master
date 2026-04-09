@@ -11,6 +11,17 @@
  *   tac-master Run   → Agent
  *   tac-master Event → AgentLog → EventStreamEntry (row rendering)
  *   tac-master Repo  → kept as a separate `repos` state slice
+ *
+ * @task T033
+ * @epic T028
+ * @why T030 audit found hookEventTypeToCategory() returned "hook" for every
+ *      event, making the HOOK counter show all events and THINKING always 0.
+ *      Event categories are now semantically correct per hook type.
+ * @what Fixed hookEventTypeToCategory and hookToAgentLog to map PreToolUse/
+ *       PostToolUse → "tool", Stop/SubagentStop/Notification/PreCompact/
+ *       UserPromptSubmit → "hook", and documented that "thinking" and
+ *       "response" events cannot be sourced from Claude Code hooks alone —
+ *       they require stream-json parsing (TODO: wire at ingest time).
  */
 
 import { defineStore } from "pinia";
@@ -76,9 +87,12 @@ function runToAgent(run: RunSummary): Agent {
     session_id: run.adw_id,
     adw_id: run.adw_id,
     adw_step: run.workflow,
-    input_tokens: 0,
-    output_tokens: run.tokens_used,
-    total_cost: 0, // populated by token ledger via separate endpoint later
+    // T033: use token_ledger totals when available (T032 populates these).
+    // Falls back to tokens_used (output-only from the runs table) and 0 cost
+    // for deployments where T032 hasn't landed yet.
+    input_tokens: run.input_tokens ?? 0,
+    output_tokens: run.output_tokens ?? run.tokens_used,
+    total_cost: run.total_cost_usd ?? 0,
     archived: run.status === "succeeded" || run.status === "failed" || run.status === "aborted",
     metadata: {
       template_name: run.workflow,
@@ -100,9 +114,30 @@ function runToAgent(run: RunSummary): Agent {
   };
 }
 
+/**
+ * Map a tac-master hook_event_type to an EventCategory.
+ *
+ * Semantic buckets (T033 fix — previously everything returned "hook"):
+ *   "tool"     → PreToolUse, PostToolUse
+ *   "hook"     → lifecycle events: UserPromptSubmit, Stop, SubagentStop,
+ *                Notification, PreCompact, and any unrecognised hook type
+ *
+ * NOTE: "response" (Claude's assistant text) and "thinking" (reasoning blocks)
+ * are NOT produced by Claude Code hooks. They live inside the stream-json file
+ * that Claude Code writes to <worktree>/agents/<adw_id>/<phase>/cc_raw_output.jsonl.
+ * TODO: parse cc_raw_output.jsonl at ingest time in the dashboard server and
+ * emit synthetic hook events with hook_event_type="AssistantResponse" and
+ * hook_event_type="ThinkingBlock" so those categories can be surfaced here.
+ */
 function hookEventTypeToCategory(t: string): EventCategory {
-  // Claude Code hook events are all "hook" category in the orchestrator taxonomy
-  return "hook";
+  switch (t) {
+    case "PreToolUse":
+    case "PostToolUse":
+      return "tool";
+    default:
+      // UserPromptSubmit, Stop, SubagentStop, Notification, PreCompact, etc.
+      return "hook";
+  }
 }
 
 function hookEventTypeToLevel(t: string): LogLevel | "SUCCESS" {
@@ -152,11 +187,16 @@ function hookToAgentLog(h: HookEvent): AgentLog {
     task_slug: h.phase ?? null,
     entry_index: null,
     event_category: hookEventTypeToCategory(h.hook_event_type),
+    // event_type drives the per-row category badge in AgentLogRow.vue.
+    // - PreToolUse / PostToolUse → "tool_use"  (TOOL category)
+    // - All lifecycle hooks (UserPromptSubmit, Stop, SubagentStop,
+    //   Notification, PreCompact, …) → lowercased hook_event_type (HOOK cat)
+    // NOTE: "text" / "thinking" event_types would be emitted by synthetic
+    // AssistantResponse / ThinkingBlock events from cc_raw_output.jsonl
+    // parsing — not yet implemented; see hookEventTypeToCategory TODO above.
     event_type: h.hook_event_type === "PreToolUse" || h.hook_event_type === "PostToolUse"
       ? "tool_use"
-      : h.hook_event_type === "UserPromptSubmit"
-        ? "text"
-        : h.hook_event_type.toLowerCase(),
+      : h.hook_event_type.toLowerCase(),
     content: summariseHookPayload(h),
     payload: {
       ...p,

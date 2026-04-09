@@ -32,6 +32,10 @@ export interface RunSummary {
   ended_at?: number | null;
   pid?: number | null;
   tokens_used: number;
+  // T033: token ledger attribution fields (populated when T032 backfills ledger)
+  input_tokens?: number;
+  output_tokens?: number;
+  total_cost_usd?: number;
 }
 
 export interface RepoStatus {

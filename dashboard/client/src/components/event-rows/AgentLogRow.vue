@@ -1,3 +1,13 @@
+<!--
+  AgentLogRow — renders a single hook event as a row in the event stream.
+
+  @task T033
+  @epic T028
+  @why T030 audit: metadata.phase and metadata.repo_url existed on events but
+       were never shown per-row, making it impossible to tell which phase/repo
+       an event came from in a multi-agent view.
+  @what Added phase badge and repo chip beneath agent name in event-agent cell.
+-->
 <template>
   <div class="agent-log-row-wrapper">
     <div
@@ -22,6 +32,10 @@
         <span class="agent-id" :style="{ borderColor: agentColor }">{{
           agentDisplayName
         }}</span>
+        <!-- T033: per-row phase badge -->
+        <span v-if="eventPhase" class="event-phase-badge">{{ eventPhase }}</span>
+        <!-- T033: per-row repo chip -->
+        <span v-if="eventRepoSlug" class="event-repo-chip" :title="eventRepoFull">{{ eventRepoSlug }}</span>
       </div>
 
       <div class="event-content" @click="toggleExpanded">
@@ -174,6 +188,30 @@ const agentDisplayName = computed(() => {
     return props.event.agent_name;
   }
   return `Agent-${formatAgentId(props.event.agent_id || "")}`;
+});
+
+// T033: per-row phase label.
+// EventStream.vue's getEventData merges EventStreamEntry.metadata into the
+// AgentLog object it passes as the :event prop, so we read (event as any).metadata.
+const eventPhase = computed((): string | null => {
+  const meta = (props.event as any).metadata;
+  if (meta?.phase) return String(meta.phase);
+  // Fallback: some payloads carry phase directly
+  return (props.event.payload as any)?.phase ?? null;
+});
+
+// T033: per-row repo chip — derive slug from repo_url or repo_slug in payload
+const eventRepoFull = computed((): string => {
+  const meta = (props.event as any).metadata;
+  if (meta?.repo_url) return String(meta.repo_url);
+  return (props.event.payload as any)?.repo_url ?? "";
+});
+
+const eventRepoSlug = computed((): string | null => {
+  const full = eventRepoFull.value;
+  if (!full) return null;
+  // Strip https://github.com/ and .git suffix to produce "owner/repo"
+  return full.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "") || null;
 });
 
 const displayEventType = computed(() => {
@@ -367,6 +405,38 @@ function formatTime(timestamp: Date | string): string {
   border: 1.5px solid; /* Color set via inline style */
   border-radius: 4px;
   display: inline-block;
+}
+
+/* T033: phase badge */
+.event-phase-badge {
+  display: inline-block;
+  font-size: 0.6rem;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 108px;
+}
+
+/* T033: repo chip */
+.event-repo-chip {
+  display: inline-block;
+  font-size: 0.6rem;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(99, 102, 241, 0.12);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 108px;
 }
 
 /* Content */

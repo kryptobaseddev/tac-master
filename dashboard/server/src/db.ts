@@ -217,15 +217,45 @@ export function getRepoStatuses(): RepoStatus[] {
 
 export function getActiveAndRecentRuns(limit = 50): RunSummary[] {
   if (!tacDb) return [];
-  const rows = tacDb
-    .prepare(
-      `SELECT * FROM runs
-       ORDER BY
-         CASE WHEN status IN ('pending','running') THEN 0 ELSE 1 END,
-         COALESCE(started_at, 0) DESC
-       LIMIT ?`,
-    )
-    .all(limit) as any[];
+  // T033: left-join token_ledger so input_tokens, output_tokens, and
+  // total_cost_usd are populated once T032 backfills the ledger.
+  // If token_ledger doesn't exist yet (older deployments), the query falls
+  // back gracefully via the LEFT JOIN (values will be null → 0).
+  let rows: any[];
+  try {
+    rows = tacDb
+      .prepare(
+        `SELECT r.*,
+                COALESCE(tl.sum_input,  0) AS tl_input_tokens,
+                COALESCE(tl.sum_output, 0) AS tl_output_tokens,
+                COALESCE(tl.sum_cost,   0) AS tl_cost_usd
+         FROM runs r
+         LEFT JOIN (
+           SELECT adw_id,
+                  SUM(input_tokens)  AS sum_input,
+                  SUM(output_tokens) AS sum_output,
+                  SUM(cost_usd)      AS sum_cost
+           FROM token_ledger
+           GROUP BY adw_id
+         ) tl ON tl.adw_id = r.adw_id
+         ORDER BY
+           CASE WHEN r.status IN ('pending','running') THEN 0 ELSE 1 END,
+           COALESCE(r.started_at, 0) DESC
+         LIMIT ?`,
+      )
+      .all(limit) as any[];
+  } catch {
+    // token_ledger table may not exist in older deployments — fall back
+    rows = tacDb
+      .prepare(
+        `SELECT * FROM runs
+         ORDER BY
+           CASE WHEN status IN ('pending','running') THEN 0 ELSE 1 END,
+           COALESCE(started_at, 0) DESC
+         LIMIT ?`,
+      )
+      .all(limit) as any[];
+  }
   return rows.map((r) => ({
     adw_id: r.adw_id,
     repo_url: r.repo_url,
@@ -238,6 +268,9 @@ export function getActiveAndRecentRuns(limit = 50): RunSummary[] {
     ended_at: r.ended_at,
     pid: r.pid,
     tokens_used: r.tokens_used ?? 0,
+    input_tokens: r.tl_input_tokens ?? 0,
+    output_tokens: r.tl_output_tokens ?? 0,
+    total_cost_usd: r.tl_cost_usd ?? 0,
   }));
 }
 

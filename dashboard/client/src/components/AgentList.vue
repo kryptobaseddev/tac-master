@@ -64,6 +64,8 @@
                 :style="{ borderColor: getAgentColor(agent) }"
                 >{{ agent.name }}</span
               >
+              <!-- T033: Role badge inferred from adw_id + workflow -->
+              <RoleBadge :role="inferRole(agent.adw_id, agent.adw_step)" />
             </div>
             <div
               class="agent-status-badge"
@@ -155,6 +157,8 @@ import { computed, ref } from "vue";
 import { useOrchestratorStore } from "../stores/orchestratorStore";
 import { getAgentBorderColor as getAgentBorderColorUtil, getAgentBackgroundColor } from "../utils/agentColors";
 import type { Agent } from "../types";
+import RoleBadge from "./RoleBadge.vue";
+import { inferRole } from "../utils/inferRole";
 
 // Store
 const store = useOrchestratorStore();
@@ -313,6 +317,8 @@ const getAgentLogCount = (
         return type === "tool_use" || type === "tooluseblock";
       }).length;
 
+    // T033: HOOK counter now counts only semantic hook events (not tool events).
+    // PreToolUse/PostToolUse have eventCategory="tool" after the store fix.
     case "HOOK":
       return events.filter((e) => e.eventCategory === "hook").length;
 
