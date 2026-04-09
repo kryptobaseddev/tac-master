@@ -3,7 +3,6 @@
 
 import sys
 import os
-from typing import Dict, List
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -153,7 +152,7 @@ def test_get_model_for_slash_command():
         try:
             os.rmdir(os.path.dirname(state_file))
             os.rmdir(os.path.dirname(os.path.dirname(state_file)))
-        except:
+        except Exception:
             pass
     
     return True

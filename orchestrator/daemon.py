@@ -136,7 +136,8 @@ def cmd_doctor(cfg: TacMasterConfig) -> int:
         print(f"  mcp config {mcp}: {'✓' if p.exists() else '⚠ missing (review phase degraded)'}")
 
     # Check Claude Code CLI is installed and callable
-    import shutil as _sh, subprocess as _sp
+    import shutil as _sh
+    import subprocess as _sp
     claude_bin = cfg.identity.get("CLAUDE_CODE_PATH") or _sh.which("claude")
     if not claude_bin:
         print("  claude code: ✗ NOT FOUND in PATH")
@@ -267,7 +268,7 @@ def main() -> int:
 
     if args.dry_run:
         # Patch _dispatch to a no-op for dry-run
-        original = dispatcher._dispatch
+        _original = dispatcher._dispatch
         def dry(_repo, _issue):
             log.info("[dry-run] would dispatch %s#%d", _repo.url, _issue.number)
             return False

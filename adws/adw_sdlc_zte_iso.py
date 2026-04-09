@@ -95,7 +95,7 @@ def main():
         issue_number,
         adw_id,
     ]
-    print(f"\n=== ISOLATED PLAN PHASE ===")
+    print("\n=== ISOLATED PLAN PHASE ===")
     print(f"Running: {' '.join(plan_cmd)}")
     plan = subprocess.run(plan_cmd)
     if plan.returncode != 0:
@@ -110,7 +110,7 @@ def main():
         issue_number,
         adw_id,
     ]
-    print(f"\n=== ISOLATED BUILD PHASE ===")
+    print("\n=== ISOLATED BUILD PHASE ===")
     print(f"Running: {' '.join(build_cmd)}")
     build = subprocess.run(build_cmd)
     if build.returncode != 0:
@@ -127,7 +127,7 @@ def main():
         "--skip-e2e",  # Always skip E2E tests in SDLC workflows
     ]
 
-    print(f"\n=== ISOLATED TEST PHASE ===")
+    print("\n=== ISOLATED TEST PHASE ===")
     print(f"Running: {' '.join(test_cmd)}")
     test = subprocess.run(test_cmd)
     if test.returncode != 0:
@@ -140,7 +140,7 @@ def main():
                 "Automatic shipping cancelled due to test failures.\n"
                 "Please fix the tests and run the workflow again.",
             )
-        except:
+        except Exception:
             pass
         sys.exit(1)
 
@@ -155,7 +155,7 @@ def main():
     if skip_resolution:
         review_cmd.append("--skip-resolution")
 
-    print(f"\n=== ISOLATED REVIEW PHASE ===")
+    print("\n=== ISOLATED REVIEW PHASE ===")
     print(f"Running: {' '.join(review_cmd)}")
     review = subprocess.run(review_cmd)
     if review.returncode != 0:
@@ -167,7 +167,7 @@ def main():
                 "Automatic shipping cancelled due to review failures.\n"
                 "Please address the review issues and run the workflow again.",
             )
-        except:
+        except Exception:
             pass
         sys.exit(1)
 
@@ -179,7 +179,7 @@ def main():
         issue_number,
         adw_id,
     ]
-    print(f"\n=== ISOLATED DOCUMENTATION PHASE ===")
+    print("\n=== ISOLATED DOCUMENTATION PHASE ===")
     print(f"Running: {' '.join(document_cmd)}")
     document = subprocess.run(document_cmd)
     if document.returncode != 0:
@@ -195,7 +195,7 @@ def main():
         issue_number,
         adw_id,
     ]
-    print(f"\n=== ISOLATED SHIP PHASE (APPROVE & MERGE) ===")
+    print("\n=== ISOLATED SHIP PHASE (APPROVE & MERGE) ===")
     print(f"Running: {' '.join(ship_cmd)}")
     ship = subprocess.run(ship_cmd)
     if ship.returncode != 0:
@@ -207,14 +207,14 @@ def main():
                 "Could not automatically approve and merge the PR.\n"
                 "Please check the ship logs and merge manually if needed.",
             )
-        except:
+        except Exception:
             pass
         sys.exit(1)
 
-    print(f"\n=== 🎉 ZERO TOUCH EXECUTION COMPLETED ===")
+    print("\n=== 🎉 ZERO TOUCH EXECUTION COMPLETED ===")
     print(f"ADW ID: {adw_id}")
-    print(f"All phases completed successfully!")
-    print(f"✅ Code has been shipped to production!")
+    print("All phases completed successfully!")
+    print("✅ Code has been shipped to production!")
     print(f"\nWorktree location: trees/{adw_id}/")
     print(f"To clean up: ./scripts/purge_tree.sh {adw_id}")
 
@@ -230,7 +230,7 @@ def main():
             "✅ Ship phase completed\n\n"
             "🚢 **Code has been automatically shipped to production!**",
         )
-    except:
+    except Exception:
         pass
 
 

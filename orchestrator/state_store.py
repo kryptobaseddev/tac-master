@@ -20,7 +20,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
