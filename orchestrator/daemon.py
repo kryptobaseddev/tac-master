@@ -92,9 +92,9 @@ def _build_system(cfg: TacMasterConfig) -> tuple[Dispatcher, StateStore, GitHubC
 # ----------------------------------------------------------------------------
 def cmd_doctor(cfg: TacMasterConfig) -> int:
     """Validate config and environment. Exit code = number of problems."""
+    print(f"doctor UTC:    {datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}")
     problems = 0
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print(f"[{ts}] home: {cfg.home}")
+    print(f"home:          {cfg.home}")
     print(f"sqlite:        {cfg.sqlite_path}")
     print(f"repos:         {len(cfg.repos.repos)} allowlisted")
     for r in cfg.repos.repos:
