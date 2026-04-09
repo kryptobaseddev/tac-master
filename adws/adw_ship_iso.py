@@ -12,18 +12,18 @@ Usage:
 Workflow:
 1. Load state and validate worktree exists
 2. Validate ALL state fields are populated (not None)
-3. Perform manual git merge in main repository:
-   - Fetch latest from origin
-   - Checkout main
-   - Merge feature branch
-   - Push to origin/main
+3. Merge the open PR via GitHub CLI (gh pr merge):
+   - Finds the open PR for the feature branch
+   - Merges via gh pr merge --merge --delete-branch
+   This avoids touching the local base repo entirely, which prevents
+   failures when the base repo has uncommitted changes from prior deploys.
 4. Post success message to issue
 
 This workflow REQUIRES that all previous workflows have been run and that
 every field in ADWState has a value. This is our final approval step.
 
-Note: Merge operations happen in the main repository root, not in the worktree,
-to preserve the worktree's state.
+Note: Merge is performed via the GitHub API (gh pr merge) rather than
+local git operations. This approach is immune to dirty base-repo state.
 """
 
 import sys
@@ -49,102 +49,115 @@ from adw_modules.data_types import ADWStateData
 AGENT_SHIPPER = "shipper"
 
 
-def get_main_repo_root() -> str:
-    """Get the main repository root directory (parent of adws)."""
-    # This script is in adws/, so go up one level to get repo root
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def merge_pr_via_gh(branch_name: str, logger: logging.Logger) -> Tuple[bool, Optional[str]]:
+    """Merge the open PR for branch_name via GitHub CLI (gh pr merge).
 
+    This approach avoids touching the local base repository entirely,
+    which prevents failures when the base repo has uncommitted changes
+    from prior deploys (e.g. tac-update.sh modifications).
 
-def manual_merge_to_main(branch_name: str, logger: logging.Logger) -> Tuple[bool, Optional[str]]:
-    """Manually merge a branch to main using git commands.
-    
-    This runs in the main repository root, not in a worktree.
-    
     Args:
-        branch_name: The feature branch to merge
+        branch_name: The feature branch whose PR should be merged
         logger: Logger instance
-        
+
     Returns:
         Tuple of (success, error_message)
     """
-    repo_root = get_main_repo_root()
-    logger.info(f"Performing manual merge in main repository: {repo_root}")
-    
-    try:
-        # Save current branch to restore later
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        original_branch = result.stdout.strip()
-        logger.debug(f"Original branch: {original_branch}")
-        
-        # Step 1: Fetch latest from origin
-        logger.info("Fetching latest from origin...")
-        result = subprocess.run(
-            ["git", "fetch", "origin"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            return False, f"Failed to fetch from origin: {result.stderr}"
-        
-        # Step 2: Checkout main
-        logger.info("Checking out main branch...")
-        result = subprocess.run(
-            ["git", "checkout", "main"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            return False, f"Failed to checkout main: {result.stderr}"
-        
-        # Step 3: Pull latest main
-        logger.info("Pulling latest main...")
-        result = subprocess.run(
-            ["git", "pull", "origin", "main"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            # Try to restore original branch
-            subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-            return False, f"Failed to pull latest main: {result.stderr}"
-        
-        # Step 4: Merge the feature branch (no-ff to preserve all commits)
-        logger.info(f"Merging branch {branch_name} (no-ff to preserve all commits)...")
-        result = subprocess.run(
-            ["git", "merge", branch_name, "--no-ff", "-m", f"Merge branch '{branch_name}' via ADW Ship workflow"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            # Try to restore original branch
-            subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-            return False, f"Failed to merge {branch_name}: {result.stderr}"
-        
-        # Step 5: Push to origin/main
-        logger.info("Pushing to origin/main...")
-        result = subprocess.run(
-            ["git", "push", "origin", "main"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            # Try to restore original branch
-            subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-            return False, f"Failed to push to origin/main: {result.stderr}"
-        
-        # Step 6: Restore original branch
-        logger.info(f"Restoring original branch: {original_branch}")
-        subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-        
-        logger.info("✅ Successfully merged and pushed to main!")
-        return True, None
-        
-    except Exception as e:
-        logger.error(f"Unexpected error during merge: {e}")
-        # Try to restore original branch
+    github_pat = os.environ.get("GITHUB_PAT", "")
+    env = {
+        "GH_TOKEN": github_pat,
+        "PATH": os.environ.get("PATH", ""),
+    }
+
+    # Resolve the repo path from the GITHUB_REPO_URL env var, then
+    # fall back to reading git remote from the worktree/clone.
+    repo_url = os.environ.get("GITHUB_REPO_URL", "")
+    if repo_url:
+        repo_path = repo_url.replace("https://github.com/", "").replace(".git", "")
+    else:
+        # Last-resort: read from git remote in the script's own directory
         try:
-            subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-        except:
-            pass
-        return False, str(e)
+            r = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True, text=True,
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+            )
+            repo_path = r.stdout.strip().replace("https://github.com/", "").replace(".git", "")
+        except Exception:
+            return False, "Could not determine GitHub repo path (no GITHUB_REPO_URL env)"
+
+    logger.info(f"Looking for open PR for branch '{branch_name}' in {repo_path}")
+
+    # Step 1: Find the open PR number for this branch
+    try:
+        result = subprocess.run(
+            [
+                "gh", "pr", "list",
+                "--repo", repo_path,
+                "--head", branch_name,
+                "--state", "open",
+                "--json", "number,mergeable,title",
+            ],
+            capture_output=True, text=True, env=env,
+        )
+        if result.returncode != 0:
+            return False, f"gh pr list failed: {result.stderr.strip()}"
+
+        prs = json.loads(result.stdout)
+        if not prs:
+            return False, (
+                f"No open PR found for branch '{branch_name}' in {repo_path}. "
+                "Ensure the PR was created before running ship_iso."
+            )
+
+        pr = prs[0]
+        pr_number = pr["number"]
+        mergeable = pr.get("mergeable", "UNKNOWN")
+        logger.info(f"Found PR #{pr_number}: '{pr['title']}' (mergeable={mergeable})")
+
+        if mergeable == "CONFLICTING":
+            return False, (
+                f"PR #{pr_number} has merge conflicts. "
+                "Resolve conflicts and re-run the ship workflow."
+            )
+
+    except json.JSONDecodeError as exc:
+        return False, f"Failed to parse gh pr list output: {exc}"
+    except Exception as exc:
+        return False, f"Unexpected error finding PR: {exc}"
+
+    # Step 2: Merge via gh pr merge
+    logger.info(f"Merging PR #{pr_number} via gh pr merge --merge --delete-branch ...")
+    try:
+        result = subprocess.run(
+            [
+                "gh", "pr", "merge", str(pr_number),
+                "--repo", repo_path,
+                "--merge",
+                "--delete-branch",
+                "--subject", f"Merge branch '{branch_name}' via ADW Ship workflow",
+            ],
+            capture_output=True, text=True, env=env,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            # gh prints "Pull request #N was already merged" on duplicate calls;
+            # treat that as success so retries are idempotent.
+            if "already merged" in stderr.lower():
+                logger.info("PR was already merged — treating as success.")
+                return True, None
+            return False, f"gh pr merge failed: {stderr}"
+
+        logger.info(f"PR #{pr_number} merged successfully via GitHub API.")
+        return True, None
+
+    except FileNotFoundError:
+        return False, (
+            "gh CLI not found. Ensure 'gh' is installed and on PATH. "
+            "Cannot fall back to local git merge (dirty-repo guard)."
+        )
+    except Exception as exc:
+        return False, f"Unexpected error during gh pr merge: {exc}"
 
 
 def validate_state_completeness(state: ADWState, logger: logging.Logger) -> tuple[bool, list[str]]:
@@ -270,34 +283,34 @@ def main():
                            f"🔍 Preparing to merge branch: {branch_name}")
     )
     
-    # Step 4: Perform manual merge
-    logger.info(f"Starting manual merge of {branch_name} to main...")
+    # Step 4: Merge PR via gh CLI (avoids local-repo dirty-state failures)
+    logger.info(f"Merging PR for branch {branch_name} via gh pr merge...")
     make_issue_comment(
         issue_number,
-        format_issue_message(adw_id, AGENT_SHIPPER, f"🔀 Merging {branch_name} to main...\n"
-                           "Using manual git operations in main repository")
+        format_issue_message(adw_id, AGENT_SHIPPER, f"🔀 Merging PR for branch `{branch_name}` via GitHub API...\n"
+                           "Using `gh pr merge` — immune to dirty base-repo state")
     )
-    
-    success, error = manual_merge_to_main(branch_name, logger)
-    
+
+    success, error = merge_pr_via_gh(branch_name, logger)
+
     if not success:
-        logger.error(f"Failed to merge: {error}")
+        logger.error(f"Failed to merge PR: {error}")
         make_issue_comment(
             issue_number,
-            format_issue_message(adw_id, AGENT_SHIPPER, f"❌ Failed to merge: {error}")
+            format_issue_message(adw_id, AGENT_SHIPPER, f"❌ Failed to merge PR: {error}")
         )
         sys.exit(1)
-    
-    logger.info(f"✅ Successfully merged {branch_name} to main")
-    
+
+    logger.info(f"✅ Successfully merged PR for branch {branch_name}")
+
     # Step 5: Post success message
     make_issue_comment(
         issue_number,
-        format_issue_message(adw_id, AGENT_SHIPPER, 
+        format_issue_message(adw_id, AGENT_SHIPPER,
                            f"🎉 **Successfully shipped!**\n\n"
                            f"✅ Validated all state fields\n"
-                           f"✅ Merged branch `{branch_name}` to main\n"
-                           f"✅ Pushed to origin/main\n\n"
+                           f"✅ Merged PR for branch `{branch_name}` via GitHub API\n"
+                           f"✅ Branch deleted after merge\n\n"
                            f"🚢 Code has been deployed to production!")
     )
     

@@ -321,7 +321,13 @@ class Dispatcher:
 
         Two-way reap:
           1. Natural finish: pid gone → infer status from state.json
-          2. Hang detection: pid alive but run has been in "running" state
+          2. Zombie reap: pid is a zombie (exited but not waited on) →
+             call os.waitpid to collect exit status and infer final status.
+             This happens when uv run spawns a python child that exits with
+             sys.exit(1): uv exits, becomes a zombie because the daemon
+             never calls wait(). os.kill(pid, 0) succeeds on zombies, so
+             without explicit waitpid the run stays "running" forever.
+          3. Hang detection: pid alive but run has been in "running" state
              for more than _RUN_HANG_TIMEOUT_SECONDS → SIGKILL and fail.
         """
         import time as _time
@@ -333,11 +339,32 @@ class Dispatcher:
 
             pid_alive = True
             try:
-                os.kill(pid, 0)  # probe
+                os.kill(pid, 0)  # probe — also succeeds for zombie processes
             except ProcessLookupError:
                 pid_alive = False
             except PermissionError:
                 continue
+
+            if pid_alive:
+                # Attempt a non-blocking wait to reap any zombie.  If the
+                # process is still truly running, waitpid returns (0, 0).
+                # If it is a zombie (exited but un-reaped), waitpid returns
+                # (pid, raw_status) and we can treat it as finished.
+                try:
+                    reaped_pid, raw_status = os.waitpid(pid, os.WNOHANG)
+                    if reaped_pid == pid:
+                        # Process was a zombie — now reaped.
+                        exit_code = os.waitstatus_to_exitcode(raw_status)
+                        log.info(
+                            "Reaped zombie pid=%d adw=%s exit_code=%d",
+                            pid, run["adw_id"], exit_code,
+                        )
+                        pid_alive = False  # fall through to finish logic below
+                except ChildProcessError:
+                    # Not our child (e.g. adopted after re-parent) — ignore
+                    pass
+                except OSError:
+                    pass
 
             if pid_alive:
                 # Check for hang
@@ -366,10 +393,10 @@ class Dispatcher:
                     )
                 continue  # still running (or just killed)
 
-            # Process gone; mark finished. We don't know the exit code cleanly
-            # because we spawned detached — the log file is the source of truth.
-            # The Lead process writes adw_state.json before exit; inspect it
-            # to get final status.
+            # Process gone (or zombie now reaped); mark finished.
+            # We don't know the exit code cleanly because we spawned detached
+            # — the log file is the source of truth. The Lead process writes
+            # adw_state.json before exit; inspect it to get final status.
             adw_id = run["adw_id"]
             final_status = self._infer_final_status(run)
             log.info("Run %s finished: %s", adw_id, final_status)
