@@ -34,6 +34,7 @@ import {
   saveModelPricesConfig,
   probeGitHubRepo,
   restartDaemon,
+  retryIssue,
   type RepoEntry,
 } from "./config";
 import type { HookEvent, WsMessage } from "./types";
@@ -355,6 +356,36 @@ const server = Bun.serve({
         return json(result, result.ok ? 200 : 500);
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    /**
+     * POST /api/ops/retry-issue
+     *
+     * Reset a failed/aborted issue so the next poll cycle re-dispatches it.
+     * Body: { issue_number: number, repo_url: string }
+     *
+     * Delegates to orchestrator/ops.py via `uv run` so the guard logic lives
+     * in exactly one place (Python), regardless of whether the retry comes
+     * from the dashboard or the CLI.
+     *
+     * @task T012
+     * @epic T004
+     * @why Provides the dashboard's Retry button a backend endpoint that calls
+     *      the same service method as the CLI, ensuring consistent status guards.
+     * @what Spawns `uv run orchestrator/ops.py retry <issue> <repo>` and
+     *      returns its exit code + stdout/stderr as JSON.
+     */
+    if (url.pathname === "/api/ops/retry-issue" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as { issue_number?: number; repo_url?: string };
+        if (!body.issue_number || !body.repo_url) {
+          return json({ ok: false, error: "issue_number and repo_url are required" }, 400);
+        }
+        const result = await retryIssue(body.issue_number, body.repo_url);
+        return json(result, result.ok ? 200 : 422);
+      } catch (e: any) {
+        return json({ ok: false, error: String(e?.message ?? e) }, 500);
       }
     }
 

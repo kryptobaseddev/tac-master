@@ -90,6 +90,7 @@ function runToAgent(run: RunSummary): Agent {
       started_at_unix: run.started_at,
       ended_at_unix: run.ended_at,
       runtime: "native",
+      run_status: run.status,
     },
     task: `${slug} · issue #${run.issue_number}`,
     log_count: 0,

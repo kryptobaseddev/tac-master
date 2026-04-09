@@ -1,5 +1,20 @@
 <script setup lang="ts">
-import { computed } from "vue";
+/**
+ * RunDetailsPanel — right-panel showing metadata for the selected run.
+ *
+ * Includes a Retry button that appears only when the underlying tac-master
+ * run status is 'failed' or 'aborted', allowing operators to re-queue the
+ * issue without touching SQLite manually.
+ *
+ * @task T012
+ * @epic T004
+ * @why Operators previously needed manual SQLite edits to retry a failed run;
+ *      this button calls POST /api/ops/retry-issue which uses the same
+ *      guarded service method as the CLI.
+ * @what Shows a Retry button for failed/aborted runs; posts to the backend
+ *      retry endpoint and displays success/error feedback inline.
+ */
+import { computed, ref } from "vue";
 import { useOrchestratorStore } from "../stores/orchestratorStore";
 import type { EventStreamEntry, Agent } from "../types";
 
@@ -24,6 +39,50 @@ const phaseCounts = computed(() => {
 const repoSlug = computed(() => agent.value?.metadata?.repo_slug ?? "");
 const repoUrl = computed(() => agent.value?.metadata?.repo_url ?? "");
 const issueNumber = computed(() => agent.value?.metadata?.issue_number ?? null);
+
+// The raw tac-master run status stored in metadata by orchestratorStore.ts
+const runStatus = computed(() => (agent.value?.metadata?.run_status as string | undefined) ?? null);
+
+// Show Retry button only for failed/aborted runs that have a repo+issue
+const canRetry = computed(
+  () =>
+    (runStatus.value === "failed" || runStatus.value === "aborted") &&
+    !!repoUrl.value &&
+    issueNumber.value != null,
+);
+
+// Retry button UI state
+const retryPending = ref(false);
+const retryMessage = ref<{ ok: boolean; text: string } | null>(null);
+
+/**
+ * Post a retry request to the dashboard backend.  The backend shells out to
+ * orchestrator/ops.py which performs the guarded status reset.
+ */
+async function handleRetry(): Promise<void> {
+  if (!canRetry.value || retryPending.value) return;
+  retryMessage.value = null;
+  retryPending.value = true;
+  try {
+    const resp = await fetch("/api/ops/retry-issue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        issue_number: issueNumber.value,
+        repo_url: repoUrl.value,
+      }),
+    });
+    const data = (await resp.json()) as { ok: boolean; message?: string; error?: string };
+    retryMessage.value = {
+      ok: data.ok,
+      text: data.message ?? data.error ?? (data.ok ? "Retry queued." : "Retry failed."),
+    };
+  } catch (err: any) {
+    retryMessage.value = { ok: false, text: String(err?.message ?? err) };
+  } finally {
+    retryPending.value = false;
+  }
+}
 
 function fmtTs(ts: string | Date | undefined): string {
   if (!ts) return "—";
@@ -85,6 +144,30 @@ function statusColor(s: string | null): string {
           <div><span class="k">started</span><span class="v">{{ fmtTs(agent.created_at) }}</span></div>
           <div><span class="k">duration</span><span class="v">{{ fmtDuration(agent) }}</span></div>
           <div v-if="agent.metadata?.pid"><span class="k">pid</span><span class="v">{{ agent.metadata.pid }}</span></div>
+        </div>
+      </section>
+
+      <!-- Retry action — only visible for failed / aborted runs -->
+      <section v-if="canRetry" class="rd-card rd-card-action">
+        <div class="rd-card-head">
+          <span class="rd-icon rd-icon-warn">!</span>
+          <span class="rd-name">Run {{ runStatus }}</span>
+        </div>
+        <div class="rd-retry-body">
+          <p class="rd-retry-hint">
+            This run ended in <strong>{{ runStatus }}</strong>. Retrying will reset the issue
+            status and re-queue it for the next poll cycle.
+          </p>
+          <button
+            class="rd-retry-btn"
+            :disabled="retryPending"
+            @click="handleRetry"
+          >
+            {{ retryPending ? "Retrying..." : "Retry Issue" }}
+          </button>
+          <p v-if="retryMessage" :class="['rd-retry-msg', retryMessage.ok ? 'ok' : 'err']">
+            {{ retryMessage.text }}
+          </p>
         </div>
       </section>
 
@@ -282,5 +365,65 @@ function statusColor(s: string | null): string {
   color: #6b7280;
   font-size: 11px;
   font-style: italic;
+}
+.rd-card-action {
+  border-color: #7f1d1d;
+  background: #1a0a0a;
+}
+.rd-icon-warn {
+  color: #ef4444;
+  font-size: 13px;
+  font-weight: 900;
+}
+.rd-retry-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rd-retry-hint {
+  font-size: 11px;
+  color: #9ca3af;
+  margin: 0;
+  line-height: 1.5;
+}
+.rd-retry-hint strong {
+  color: #ef4444;
+}
+.rd-retry-btn {
+  align-self: flex-start;
+  background: #ef4444;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.rd-retry-btn:hover:not(:disabled) {
+  background: #dc2626;
+}
+.rd-retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rd-retry-msg {
+  font-size: 11px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+.rd-retry-msg.ok {
+  background: #052e16;
+  color: #4ade80;
+  border: 1px solid #166534;
+}
+.rd-retry-msg.err {
+  background: #1c0606;
+  color: #f87171;
+  border: 1px solid #7f1d1d;
 }
 </style>

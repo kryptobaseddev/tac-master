@@ -351,6 +351,51 @@ export async function probeGitHubRepo(url: string): Promise<RepoProbeResult> {
 // Daemon reload
 // ---------------------------------------------------------------------------
 
+/**
+ * Retry a failed/aborted issue by invoking orchestrator/ops.py via uv run.
+ *
+ * The Python module is the single source of truth for guard logic (status
+ * checks, audit events). This function is a thin Bun shim that spawns the
+ * subprocess and surfaces the result as structured JSON.
+ *
+ * @task T012
+ * @epic T004
+ * @why Dashboard endpoint must share the same guard logic as the CLI to
+ *      prevent double-dispatch or retrying an already-running issue.
+ * @what Shells out to `uv run orchestrator/ops.py retry <issue> <repo>` and
+ *      parses stdout/stderr into a typed result object.
+ */
+export async function retryIssue(
+  issueNumber: number,
+  repoUrl: string,
+): Promise<{ ok: boolean; message: string }> {
+  const tacHome = process.env.TAC_MASTER_HOME ?? "/srv/tac-master";
+  const opsScript = `${tacHome}/orchestrator/ops.py`;
+
+  try {
+    const proc = Bun.spawn(
+      ["uv", "run", opsScript, "retry", String(issueNumber), repoUrl],
+      {
+        cwd: tacHome,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, TAC_MASTER_HOME: tacHome },
+      },
+    );
+    await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const combined = (stdout + (stderr ? `\n${stderr}` : "")).trim();
+
+    if (proc.exitCode === 0) {
+      return { ok: true, message: combined || `Issue #${issueNumber} queued for retry.` };
+    }
+    return { ok: false, message: combined || `ops.py exited with code ${proc.exitCode}` };
+  } catch (e: any) {
+    return { ok: false, message: String(e?.message ?? e) };
+  }
+}
+
 export async function restartDaemon(service = "tac-master"): Promise<{
   ok: boolean;
   output: string;
