@@ -31,7 +31,7 @@ import pytest
 # Make adw_modules importable whether run from repo root or adws/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from adw_modules.data_types import AgentPromptResponse, GitHubIssue
+from adw_modules.data_types import ADWStateData, AgentPromptResponse, GitHubIssue
 from adw_modules.workflow_ops import (
     _cleanup_stale_issue_specs,
     _extract_classify_token,
@@ -238,6 +238,47 @@ class TestClassifyIssueIntegration:
         cmd, err = self._run_classify("some error", str(tmp_path), success=False)
         assert cmd is None
         assert err == "some error"
+
+
+# ---------------------------------------------------------------------------
+# T024 — ADWStateData accepts /patch without pydantic ValidationError
+# ---------------------------------------------------------------------------
+
+
+class TestPatchClassInADWStateData:
+    """
+    Regression tests for T024.
+
+    @task T024
+    @epic T001
+    @why IssueClassSlashCommand Literal was missing /patch, causing pydantic ValidationError
+         when plan_iso tried to save ADWStateData after classifying a patch-type issue.
+    @what Verifies ADWStateData.issue_class accepts /patch (and all other valid values)
+          and rejects unknown values.
+    """
+
+    def test_patch_class_saves_without_error(self):
+        """/patch must be accepted by ADWStateData.issue_class without ValidationError."""
+        state = ADWStateData(adw_id="test-adw-t024", issue_class="/patch")
+        assert state.issue_class == "/patch"
+
+    def test_all_valid_classes_accepted(self):
+        """All four valid issue classes must pass pydantic validation."""
+        for cls in ("/chore", "/bug", "/feature", "/patch"):
+            state = ADWStateData(adw_id="test-adw-t024", issue_class=cls)
+            assert state.issue_class == cls, f"Expected {cls!r}, got {state.issue_class!r}"
+
+    def test_invalid_class_rejected(self):
+        """Unknown issue classes must still raise ValidationError."""
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            ADWStateData(adw_id="test-adw-t024", issue_class="/invalid")
+
+    def test_none_class_accepted(self):
+        """None (unset) issue_class is still valid (field is Optional)."""
+        state = ADWStateData(adw_id="test-adw-t024", issue_class=None)
+        assert state.issue_class is None
 
 
 # ---------------------------------------------------------------------------

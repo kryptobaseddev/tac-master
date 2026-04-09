@@ -19,7 +19,7 @@ class RetryCode(str, Enum):
 
 # Supported slash commands for issue classification
 # These should align with your custom slash commands in .claude/commands that you want to run
-IssueClassSlashCommand = Literal["/chore", "/bug", "/feature"]
+IssueClassSlashCommand = Literal["/chore", "/bug", "/feature", "/patch"]
 
 # Model set types for ADW workflows
 ModelSet = Literal["base", "heavy"]
