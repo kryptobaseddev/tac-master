@@ -1,141 +1,252 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { useWebSocket } from "./composables/useWebSocket";
-import RepoStatusBoard from "./components/RepoStatusBoard.vue";
-import RunsPanel from "./components/RunsPanel.vue";
+import { ref, onMounted, computed } from "vue";
+import { useOrchestratorStore } from "./stores/orchestratorStore";
+import AgentList from "./components/AgentList.vue";
 import EventStream from "./components/EventStream.vue";
+import RunDetailsPanel from "./components/RunDetailsPanel.vue";
+import RepoBoard from "./components/RepoBoard.vue";
 import ConfigPage from "./components/ConfigPage.vue";
 
-// Derive WebSocket URL from the current browser location so it works
-// whether the user visits http://localhost:4000, http://10.0.10.22:4000,
-// or through a reverse proxy. Falls back to VITE_WS_URL env if set.
-const wsUrl =
-  (import.meta.env.VITE_WS_URL as string | undefined) ??
-  `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/stream`;
-const { events, runs, repos, isConnected, error } = useWebSocket(wsUrl);
+const store = useOrchestratorStore();
 
-type Tab = "dashboard" | "config";
+type Tab = "dashboard" | "repos" | "config";
 const activeTab = ref<Tab>("dashboard");
-const selectedRepo = ref<string | null>(null);
 
-const liveRuns = computed(
-  () =>
-    Array.from(runs.value.values()).filter(
-      (r) => r.status === "running" || r.status === "pending",
-    ).length,
-);
+const isConnected = computed(() => store.isConnected);
+const liveRuns = computed(() => store.runningAgents.length);
+const totalRepos = computed(() => store.repos.length);
+const totalTokens = computed(() => store.totalTokensToday);
+const totalCost = computed(() => store.stats.cost);
 
-const totalCostToday = computed(() =>
-  Array.from(repos.value.values()).reduce((s, r) => s + r.cost_today_usd, 0),
-);
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
 
-const totalTokensToday = computed(() =>
-  Array.from(repos.value.values()).reduce((s, r) => s + r.tokens_today, 0),
-);
+onMounted(() => {
+  store.initialize();
+});
 
-function fmtTokens(t: number): string {
-  if (t >= 1_000_000) return `${(t / 1_000_000).toFixed(2)}M`;
-  if (t >= 1_000) return `${(t / 1_000).toFixed(1)}k`;
-  return String(t);
+function handleRunSelected(_id: string) {
+  activeTab.value = "dashboard";
 }
 </script>
 
 <template>
-  <div class="h-full flex flex-col">
-    <!-- Header bar -->
-    <header
-      class="flex items-center justify-between px-5 py-3 border-b border-ink-800 bg-ink-900"
-    >
-      <div class="flex items-center gap-4">
-        <div class="text-lg font-bold text-ink-100">
-          <span class="text-accent-self">tac-</span>master
+  <div class="app">
+    <!-- Global header bar with tab nav + stats -->
+    <header class="app-header">
+      <div class="app-header-left">
+        <div class="app-brand">
+          <span class="app-brand-accent">tac-</span>master
         </div>
         <span
-          :class="[
-            'w-2 h-2 rounded-full',
-            isConnected ? 'bg-accent-succeeded' : 'bg-accent-failed',
-          ]"
+          class="app-connection-dot"
+          :class="{ 'is-connected': isConnected }"
+          :title="isConnected ? 'WebSocket connected' : 'Reconnecting…'"
         />
-        <span class="text-[11px] text-ink-400">
-          {{ isConnected ? "connected" : "reconnecting…" }}
-        </span>
-        <nav class="ml-4 flex gap-1">
+        <nav class="app-tabs">
           <button
+            :class="['app-tab', { active: activeTab === 'dashboard' }]"
             @click="activeTab = 'dashboard'"
-            :class="[
-              'px-3 py-1 rounded text-[11px] uppercase tracking-wider transition',
-              activeTab === 'dashboard'
-                ? 'bg-ink-800 text-ink-100'
-                : 'text-ink-400 hover:text-ink-100',
-            ]"
           >
             Dashboard
           </button>
           <button
+            :class="['app-tab', { active: activeTab === 'repos' }]"
+            @click="activeTab = 'repos'"
+          >
+            Repos
+          </button>
+          <button
+            :class="['app-tab', { active: activeTab === 'config' }]"
             @click="activeTab = 'config'"
-            :class="[
-              'px-3 py-1 rounded text-[11px] uppercase tracking-wider transition',
-              activeTab === 'config'
-                ? 'bg-ink-800 text-ink-100'
-                : 'text-ink-400 hover:text-ink-100',
-            ]"
           >
             Config
           </button>
         </nav>
       </div>
-      <div class="flex items-center gap-5 text-[11px]">
-        <div>
-          <span class="text-ink-400">live:</span>
-          <span class="text-accent-running font-bold ml-1">{{ liveRuns }}</span>
+      <div class="app-header-right">
+        <div class="stat">
+          <span class="stat-label">live</span>
+          <span class="stat-value stat-live">{{ liveRuns }}</span>
         </div>
-        <div>
-          <span class="text-ink-400">repos:</span>
-          <span class="text-ink-100 font-bold ml-1">{{ repos.size }}</span>
+        <div class="stat">
+          <span class="stat-label">repos</span>
+          <span class="stat-value">{{ totalRepos }}</span>
         </div>
-        <div>
-          <span class="text-ink-400">tokens/day:</span>
-          <span class="text-ink-100 font-bold ml-1">
-            {{ fmtTokens(totalTokensToday) }}
-          </span>
+        <div class="stat">
+          <span class="stat-label">runs</span>
+          <span class="stat-value">{{ store.agents.length }}</span>
         </div>
-        <div>
-          <span class="text-ink-400">cost/day:</span>
-          <span class="text-ink-100 font-bold ml-1">
-            ${{ totalCostToday.toFixed(2) }}
-          </span>
+        <div class="stat">
+          <span class="stat-label">tokens/day</span>
+          <span class="stat-value">{{ fmtTokens(totalTokens) }}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">cost/day</span>
+          <span class="stat-value">${{ totalCost.toFixed(2) }}</span>
         </div>
       </div>
     </header>
 
-    <!-- Error banner -->
-    <div
-      v-if="error"
-      class="bg-accent-failed/20 border-b border-accent-failed text-accent-failed px-4 py-1 text-[11px]"
-    >
-      {{ error }}
-    </div>
-
-    <!-- Main content area — switches between dashboard and config -->
-    <main class="flex-1 flex overflow-hidden">
+    <!-- Main content area -->
+    <main class="app-main">
+      <!-- DASHBOARD TAB -->
       <template v-if="activeTab === 'dashboard'">
-        <!-- Left: repos board + runs -->
-        <aside class="w-[540px] shrink-0 border-r border-ink-800 overflow-auto">
-          <RepoStatusBoard
-            :repos="repos"
-            :selected-repo="selectedRepo"
-            @select="selectedRepo = $event"
-          />
-          <RunsPanel :runs="runs" :selected-repo="selectedRepo" />
-        </aside>
-        <!-- Right: event stream -->
-        <div class="flex-1 overflow-hidden">
-          <EventStream :events="events" :selected-repo="selectedRepo" />
-        </div>
+        <AgentList
+          :agents="store.agents"
+          :selected-agent-id="store.selectedAgentId"
+          @select-agent="store.selectAgent"
+        />
+        <EventStream class="app-stream" />
+        <RunDetailsPanel />
       </template>
-      <template v-else>
-        <ConfigPage class="flex-1 overflow-auto" />
-      </template>
+
+      <!-- REPOS TAB -->
+      <RepoBoard
+        v-else-if="activeTab === 'repos'"
+        class="app-repos"
+        @select-run="handleRunSelected"
+      />
+
+      <!-- CONFIG TAB -->
+      <ConfigPage v-else-if="activeTab === 'config'" class="app-config" />
     </main>
   </div>
 </template>
+
+<style scoped>
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg-primary, #0a0a0a);
+  color: var(--color-text-primary, #e4e7eb);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  overflow: hidden;
+}
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--color-border, #2a2a2a);
+  background: #0f0f12;
+  flex-shrink: 0;
+  gap: 16px;
+}
+.app-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.app-brand {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f5f7fa;
+  letter-spacing: 0.02em;
+}
+.app-brand-accent {
+  color: #a855f7;
+}
+.app-connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  transition: background 0.3s;
+}
+.app-connection-dot.is-connected {
+  background: #10b981;
+  box-shadow: 0 0 8px #10b98166;
+}
+.app-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 12px;
+}
+.app-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #6b7280;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.app-tab:hover {
+  color: #e4e7eb;
+  background: #1a1a1a;
+}
+.app-tab.active {
+  color: #f5f7fa;
+  background: #2a2a2a;
+  border-bottom: 2px solid #a855f7;
+}
+.app-header-right {
+  display: flex;
+  gap: 22px;
+  align-items: center;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.stat-label {
+  font-size: 9px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.stat-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f5f7fa;
+}
+.stat-live {
+  color: #3b82f6;
+}
+.app-main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+.app-stream {
+  flex: 1;
+  min-width: 0;
+}
+.app-repos {
+  flex: 1;
+  overflow-y: auto;
+}
+.app-config {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Mobile friendliness — stack panels on narrow screens */
+@media (max-width: 900px) {
+  .app-header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .app-header-right {
+    gap: 12px;
+  }
+  .stat-label {
+    display: none;
+  }
+  .app-main {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+}
+</style>

@@ -1,3 +1,20 @@
+/**
+ * Unified type exports for the tac-master dashboard.
+ *
+ * - `orchestrator-types.d.ts` was copied verbatim from orchestrator_3_stream
+ *   and defines the Agent/AgentLog/EventStreamEntry shapes that the ported
+ *   Vue components expect.
+ * - The local `tac-master` types below are what tac-master's backend
+ *   actually returns. The store adapts between them.
+ *
+ * All downstream code imports from here via `import { ... } from "../types"`.
+ */
+
+// Re-export everything from the orchestrator-ported types
+export * from "./orchestrator-types";
+
+// ---- tac-master-native shapes (come straight from the Bun server) ----
+
 export interface HookEvent {
   id?: number;
   repo_url?: string;
@@ -42,7 +59,7 @@ export interface RepoStatus {
   last_activity_at: number | null;
 }
 
-export type WsMessage =
+export type TacWsMessage =
   | { type: "initial"; data: HookEvent[] }
   | { type: "event"; data: HookEvent }
   | { type: "run_update"; data: RunSummary }
