@@ -356,6 +356,7 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
             # which has no buffer limit, eliminating the deadlock entirely.
             result = subprocess.run(
                 cmd,
+                stdin=subprocess.DEVNULL,  # CRITICAL: don't inherit fd chain (causes epoll_wait hang)
                 stdout=output_f,  # Stream directly to file
                 stderr=subprocess.STDOUT,  # Was PIPE — caused deadlock (see above)
                 text=True,
