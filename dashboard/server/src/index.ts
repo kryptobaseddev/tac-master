@@ -211,9 +211,12 @@ const server = Bun.serve({
       return json({ lessons: getLessons(limit) });
     }
 
-    // --- Aggregate KPI stats (T037 Command Center status bar) ---
-    if (url.pathname === "/api/stats" && req.method === "GET") {
-      return json(getAggregateStats());
+    // --- Phase breakdown for a specific run (T038) ---
+    // GET /api/runs/:adw_id/phases
+    const phaseMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/phases$/);
+    if (phaseMatch && req.method === "GET") {
+      const adwId = decodeURIComponent(phaseMatch[1]);
+      return json({ adw_id: adwId, phases: getRunPhases(adwId) });
     }
 
     // ============================================================
