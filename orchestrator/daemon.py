@@ -26,6 +26,7 @@ Under systemd:  see deploy/systemd/tac-master.service
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import signal
 import sys
@@ -92,6 +93,7 @@ def _build_system(cfg: TacMasterConfig) -> tuple[Dispatcher, StateStore, GitHubC
 def cmd_doctor(cfg: TacMasterConfig) -> int:
     """Validate config and environment. Exit code = number of problems."""
     problems = 0
+    print(f"doctor: {datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}")
     print(f"home:          {cfg.home}")
     print(f"sqlite:        {cfg.sqlite_path}")
     print(f"repos:         {len(cfg.repos.repos)} allowlisted")
