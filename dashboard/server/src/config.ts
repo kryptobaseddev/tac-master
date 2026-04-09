@@ -372,9 +372,20 @@ export async function retryIssue(
   const tacHome = process.env.TAC_MASTER_HOME ?? "/srv/tac-master";
   const opsScript = `${tacHome}/orchestrator/ops.py`;
 
+  // uv lives in the service user's home dir; it is NOT on the systemd PATH.
+  // Probe common install locations in order and fall back to PATH search.
+  const UV_CANDIDATES = [
+    "/home/krypto/.local/bin/uv",
+    "/root/.local/bin/uv",
+    "/usr/local/bin/uv",
+    "uv", // PATH fallback for local dev
+  ];
+  const { existsSync } = await import("node:fs");
+  const uvBin = UV_CANDIDATES.find((p) => p === "uv" || existsSync(p)) ?? "uv";
+
   try {
     const proc = Bun.spawn(
-      ["uv", "run", opsScript, "retry", String(issueNumber), repoUrl],
+      [uvBin, "run", opsScript, "retry", String(issueNumber), repoUrl],
       {
         cwd: tacHome,
         stdout: "pipe",
