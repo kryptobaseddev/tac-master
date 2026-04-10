@@ -11,6 +11,7 @@
 
 import { join, resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import {
   initDatabase,
   insertEvent,
@@ -204,6 +205,73 @@ const server = Bun.serve({
         service: "tac-master-dashboard",
         clients: wsManager.size(),
       });
+    }
+
+    // --- System info endpoint (T124) ---
+    // Returns session_id + working_dir from active orchestrator, plus:
+    // - slash_commands: scanned from /home/keatonhoskins/.claude/commands/ .md files
+    // - adw_workflows: hard-coded PITER phases
+    // - orchestrator_tools: scanned from tac-master/orchestrator/ .py files
+    if (url.pathname === "/api/system-info" && req.method === "GET") {
+      try {
+        // Get active orchestrator session
+        const orchestrator = getActiveOrchestrator();
+        const session_id = orchestrator?.session_id ?? null;
+        const working_dir = orchestrator?.working_dir ?? null;
+
+        // Scan for slash commands in .claude/commands/
+        const slash_commands: Array<{ name: string }> = [];
+        try {
+          const commandsDir = "/home/keatonhoskins/.claude/commands/";
+          const files = await readdir(commandsDir);
+          for (const file of files) {
+            if (file.endsWith(".md")) {
+              // Extract name from filename (remove .md extension)
+              const name = file.slice(0, -3);
+              slash_commands.push({ name });
+            }
+          }
+        } catch {
+          // Directory not found or not readable — return empty array
+        }
+
+        // Hard-coded PITER phases (7 workflows)
+        const adw_workflows = [
+          { phase: "classify", display_name: "Classify", description: "Analyze and categorize the issue" },
+          { phase: "plan", display_name: "Plan", description: "Create a detailed plan to address the issue" },
+          { phase: "build", display_name: "Build", description: "Implement the solution" },
+          { phase: "test", display_name: "Test", description: "Verify the implementation" },
+          { phase: "review", display_name: "Review", description: "Code review and quality checks" },
+          { phase: "ship", display_name: "Ship", description: "Merge and deploy changes" },
+          { phase: "reflect", display_name: "Reflect", description: "Document learnings and improvements" },
+        ];
+
+        // Scan for orchestrator tools in tac-master/orchestrator/
+        const orchestrator_tools: Array<{ name: string }> = [];
+        try {
+          const orchestratorDir = "/mnt/projects/agentic-engineer/tac-master/orchestrator/";
+          const files = await readdir(orchestratorDir);
+          for (const file of files) {
+            if (file.endsWith(".py") && file !== "__init__.py") {
+              // Extract name from filename (remove .py extension)
+              const name = file.slice(0, -3);
+              orchestrator_tools.push({ name });
+            }
+          }
+        } catch {
+          // Directory not found or not readable — return empty array
+        }
+
+        return json({
+          session_id,
+          working_dir,
+          slash_commands,
+          adw_workflows,
+          orchestrator_tools,
+        });
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
     }
 
     // --- Hook ingestion ---
