@@ -306,14 +306,95 @@ class Dispatcher:
             return match.group(1)
         return None
 
+    def _fetch_cleo_task_details(self, cleo_task_id: str) -> dict:
+        """Fetch CLEO task details via `cleo show --json` for the given task ID.
+
+        Returns a dict with keys: title, parentId, depends, acceptance, size, priority.
+        Returns an empty dict on failure (non-blocking caller pattern).
+        """
+        try:
+            result = subprocess.run(
+                ["cleo", "show", cleo_task_id, "--json"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                import json as _json
+                data = _json.loads(result.stdout)
+                # cleo show --json wraps the task under data.task
+                task = data.get("data", {}).get("task", data)
+                return {
+                    "title": task.get("title", ""),
+                    "parentId": task.get("parentId"),
+                    "depends": task.get("depends") or [],
+                    "acceptance": task.get("acceptance") or [],
+                    "size": task.get("size", ""),
+                    "priority": task.get("priority", ""),
+                }
+        except Exception as e:  # noqa: BLE001
+            log.debug("cleo show %s failed (non-blocking): %s", cleo_task_id, e)
+        return {}
+
+    def _fetch_cleo_epic_details(self, epic_id: str) -> dict:
+        """Fetch CLEO epic details via `cleo show --json` for the given epic ID.
+
+        Returns a dict with keys: title, status.
+        Returns an empty dict on failure (non-blocking caller pattern).
+        """
+        try:
+            result = subprocess.run(
+                ["cleo", "show", epic_id, "--json"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                import json as _json
+                data = _json.loads(result.stdout)
+                task = data.get("data", {}).get("task", data)
+                return {
+                    "title": task.get("title", ""),
+                    "status": task.get("status", ""),
+                }
+        except Exception as e:  # noqa: BLE001
+            log.debug("cleo show %s (epic) failed (non-blocking): %s", epic_id, e)
+        return {}
+
+    def _fetch_cleo_dep_statuses(self, dep_ids: list[str]) -> dict[str, str]:
+        """Fetch status for each dependency task ID.
+
+        Returns a mapping of task_id → status string.
+        Missing/failed lookups are omitted from the result.
+        """
+        statuses: dict[str, str] = {}
+        for dep_id in dep_ids:
+            try:
+                result = subprocess.run(
+                    ["cleo", "show", dep_id, "--json"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    import json as _json
+                    data = _json.loads(result.stdout)
+                    task = data.get("data", {}).get("task", data)
+                    statuses[dep_id] = task.get("status", "unknown")
+            except Exception as e:  # noqa: BLE001
+                log.debug("cleo show %s (dep) failed (non-blocking): %s", dep_id, e)
+        return statuses
+
     def _inject_cleo_context(self, issue_title: str, issue_body: str, wt_path: Path) -> None:
         """Inject CLEO task context into the worktree as .cleo_context.md.
 
         Extracts:
           - CLEO task ID from issue title [TXXX] prefix
-          - Acceptance criteria from issue body (- [ ] lines)
+          - Acceptance criteria from issue body (- [ ] lines) and/or cleo show
+          - Parent epic name and status (via cleo show on parentId)
+          - Dependency statuses (done vs pending, via cleo show on each dep)
 
-        Writes .cleo_context.md to worktree root with task ID, title, and acceptance criteria.
+        Writes .cleo_context.md to worktree root.
         This is non-blocking: failures here should not prevent dispatch.
         """
         try:
@@ -322,45 +403,84 @@ class Dispatcher:
                 # No CLEO task ID found — skip injection
                 return
 
-            # Extract acceptance criteria from issue body
-            # Look for lines matching "- [ ] ..." pattern
-            acceptance_criteria = []
-            if issue_body:
-                for line in issue_body.split('\n'):
-                    line = line.strip()
-                    if line.startswith('- [ ]'):
-                        # Extract the criterion text (after "- [ ] ")
-                        criterion = line[5:].strip()
-                        if criterion:
-                            acceptance_criteria.append(criterion)
-
             # Strip [TXXX] prefix from issue title for the display title
             title_match = re.match(r'\[?T\d+\]?\s*(.*)', issue_title)
             display_title = title_match.group(1) if title_match else issue_title
 
+            # Fetch richer task details from cleo CLI
+            task_details = self._fetch_cleo_task_details(cleo_task_id)
+
+            # Prefer acceptance criteria from cleo (authoritative source); fall
+            # back to parsing the GitHub issue body if cleo returns nothing.
+            acceptance_criteria = task_details.get("acceptance") or []
+            if not acceptance_criteria and issue_body:
+                for line in issue_body.split('\n'):
+                    line = line.strip()
+                    if line.startswith('- [ ]'):
+                        criterion = line[5:].strip()
+                        if criterion:
+                            acceptance_criteria.append(criterion)
+
             # Build the criteria list (as markdown checklist)
-            criteria_md = ""
             if acceptance_criteria:
                 criteria_md = "\n".join(f"- [ ] {c}" for c in acceptance_criteria)
             else:
                 criteria_md = "(No acceptance criteria specified)"
 
+            # ── Parent epic context ───────────────────────────────────────
+            epic_section = ""
+            parent_id = task_details.get("parentId")
+            if parent_id:
+                epic_details = self._fetch_cleo_epic_details(parent_id)
+                epic_title = epic_details.get("title", parent_id)
+                epic_status = epic_details.get("status", "unknown")
+                epic_section = (
+                    f"\n## Parent Epic\n\n"
+                    f"**Epic ID**: {parent_id}\n"
+                    f"**Epic Title**: {epic_title}\n"
+                    f"**Epic Status**: {epic_status}\n"
+                )
+
+            # ── Dependency status ─────────────────────────────────────────
+            dep_section = ""
+            dep_ids: list[str] = task_details.get("depends") or []
+            if dep_ids:
+                dep_statuses = self._fetch_cleo_dep_statuses(dep_ids)
+                dep_lines = []
+                for dep_id in dep_ids:
+                    status = dep_statuses.get(dep_id, "unknown")
+                    marker = "done" if status in ("done", "completed") else "pending"
+                    dep_lines.append(f"- {dep_id}: {status} [{marker}]")
+                dep_section = (
+                    "\n## Dependencies\n\n"
+                    + "\n".join(dep_lines)
+                    + "\n"
+                )
+
+            # ── Task metadata ─────────────────────────────────────────────
+            priority = task_details.get("priority", "")
+            size = task_details.get("size", "")
+            meta_parts = []
+            if priority:
+                meta_parts.append(f"**Priority**: {priority}")
+            if size:
+                meta_parts.append(f"**Size**: {size}")
+            meta_line = "\n".join(meta_parts) + "\n" if meta_parts else ""
+
             # Build the context file content
-            context_content = f"""# CLEO Task Context
-
-**Task ID**: {cleo_task_id}
-**Task Title**: {display_title}
-
-## Acceptance Criteria
-
-The following acceptance criteria MUST all be satisfied before this task is considered complete:
-
-{criteria_md}
-
-## Instructions
-
-You are working on CLEO task {cleo_task_id}. Your goal is to satisfy all of the above acceptance criteria. When you have completed the work, confirm each criterion is met in your final summary.
-"""
+            context_content = (
+                f"# CLEO Task Context\n\n"
+                f"**Task ID**: {cleo_task_id}\n"
+                f"**Task Title**: {display_title}\n"
+                f"{meta_line}"
+                f"{epic_section}"
+                f"{dep_section}"
+                f"\n## Acceptance Criteria\n\n"
+                f"The following acceptance criteria MUST all be satisfied before this task is considered complete:\n\n"
+                f"{criteria_md}\n"
+                f"\n## Instructions\n\n"
+                f"You are working on CLEO task {cleo_task_id}. Your goal is to satisfy all of the above acceptance criteria. When you have completed the work, confirm each criterion is met in your final summary.\n"
+            )
 
             # Write to worktree root
             wt_path.mkdir(parents=True, exist_ok=True)
@@ -394,9 +514,20 @@ You are working on CLEO task {cleo_task_id}. Your goal is to satisfy all of the 
             # http://localhost:4000/events which works from inside the LXC.
             "TAC_DASHBOARD_URL": env.get("TAC_DASHBOARD_URL") or "http://localhost:4000/events",
         })
-        # Add CLEO_TASK_ID env var if present
+        # Add CLEO context env vars if present
         if cleo_task_id:
             env["CLEO_TASK_ID"] = cleo_task_id
+            # Fetch task details to extract epic_id and clean title
+            task_details = self._fetch_cleo_task_details(cleo_task_id)
+            if task_details:
+                # Add CLEO_EPIC_ID if the task has a parent
+                parent_id = task_details.get("parentId")
+                if parent_id:
+                    env["CLEO_EPIC_ID"] = parent_id
+                # Extract clean title (remove [TXXX] prefix) and add as CLEO_TASK_TITLE
+                task_title = task_details.get("title", cleo_task_id)
+                if task_title:
+                    env["CLEO_TASK_TITLE"] = task_title
         # Per-repo env overrides
         for k, v in repo.env.items():
             env[k] = str(v)
@@ -514,6 +645,13 @@ You are working on CLEO task {cleo_task_id}. Your goal is to satisfy all of the 
                 adw_id=adw_id,
             )
 
+            # Update CLEO task status (if this run is linked to a CLEO task).
+            # Fire and forget — callback failure must not block the reap cycle.
+            try:
+                self._update_cleo_task_status(adw_id, final_status)
+            except Exception as e:
+                log.warning("CLEO task status update failed for %s: %s", adw_id, e)
+
             # Run reflection (self-improvement lesson writer) — fire and forget.
             # Failures here should not block the daemon or reap cycle.
             try:
@@ -540,6 +678,88 @@ You are working on CLEO task {cleo_task_id}. Your goal is to satisfy all of the 
                 os.kill(pid, signal.SIGKILL)
             except Exception:
                 pass
+
+    def _update_cleo_task_status(self, adw_id: str, final_status: str) -> None:
+        """Update CLEO task status based on ADW final status.
+
+        Maps ADW status to CLEO task status:
+          - "succeeded" → `cleo complete <task_id>` (done)
+          - "failed" → `cleo update <task_id> --status failed --note "..."`
+          - "incomplete" → `cleo update <task_id> --status blocked --note "..."`
+
+        Silently returns if no CLEO task ID is linked (not all runs are CLEO-originated).
+        Wraps in try/except so callback failure does NOT crash the reap loop.
+        """
+        import time as _time
+        try:
+            cleo_task_id = self.store.get_cleo_task_id(adw_id)
+            if not cleo_task_id:
+                # Not a CLEO-linked run; silently skip
+                return
+
+            now = _time.time()
+            timestamp = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(now))
+
+            if final_status == "succeeded":
+                # Happy path: mark the CLEO task as done
+                result = subprocess.run(
+                    ["cleo", "complete", cleo_task_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    log.info(
+                        "CLEO callback: marked task %s as done (adw=%s)",
+                        cleo_task_id, adw_id,
+                    )
+                else:
+                    log.warning(
+                        "CLEO callback: cleo complete %s failed with exit code %d: %s",
+                        cleo_task_id, result.returncode, result.stderr,
+                    )
+            else:
+                # Failed or incomplete: use cleo update with descriptive note
+                if final_status == "incomplete":
+                    cleo_status = "blocked"
+                    note_text = (
+                        f"ADW run incomplete (may have crashed mid-flight) — "
+                        f"inspect agents/{adw_id}/ for logs. "
+                        f"[{timestamp}]"
+                    )
+                else:  # "failed"
+                    cleo_status = "failed"
+                    note_text = (
+                        f"ADW run failed. ADW ID: {adw_id}. "
+                        f"[{timestamp}]"
+                    )
+
+                result = subprocess.run(
+                    [
+                        "cleo", "update", cleo_task_id,
+                        "--status", cleo_status,
+                        "--note", note_text,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    log.info(
+                        "CLEO callback: marked task %s as %s with note (adw=%s)",
+                        cleo_task_id, cleo_status, adw_id,
+                    )
+                else:
+                    log.warning(
+                        "CLEO callback: cleo update %s failed with exit code %d: %s",
+                        cleo_task_id, result.returncode, result.stderr,
+                    )
+
+        except subprocess.TimeoutExpired:
+            log.warning("CLEO callback: cleo CLI timed out for task %s (adw=%s)", cleo_task_id, adw_id)
+        except Exception as e:  # noqa: BLE001
+            # Catch all exceptions to prevent callback failure from breaking the reap loop
+            log.warning("CLEO callback failed for adw=%s: %s", adw_id, e)
 
     def _run_reflect(self, adw_id: str, run: dict) -> None:
         """Spawn adw_reflect_iso to write a lesson for this finished run."""
