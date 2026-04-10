@@ -15,11 +15,13 @@ import {
   initDatabase,
   insertEvent,
   getRecentEvents,
+  getEventsByAdwId,
   getFilterOptions,
   getRepoStatuses,
   getActiveAndRecentRuns,
   getLessons,
   getRunPhases,
+  getRunPhaseSummary,
   getAggregateStats,
 } from "./db";
 import {
@@ -40,7 +42,7 @@ import {
   type RepoEntry,
 } from "./config";
 import type { HookEvent, WsMessage } from "./types";
-import { getEpics, getTasksByParent, getTaskById, getCleoStats } from "./cleo-api";
+import { getEpics, getTasksByParent, getTaskById, getCleoStats, addTaskNote, updateTaskStatus, createTask, queueTask, type CreateTaskBody } from "./cleo-api";
 import { readFile } from "node:fs/promises";
 import { parseStreamFile, resolveStreamPath, listStreamPhases } from "./stream-parser";
 
@@ -107,7 +109,7 @@ initDatabase();
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": ALLOW_ORIGIN,
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, PUT, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
@@ -190,6 +192,10 @@ const server = Bun.serve({
     if (url.pathname === "/events/recent" && req.method === "GET") {
       const limit = Number(url.searchParams.get("limit") ?? 100);
       const repoUrl = url.searchParams.get("repo_url") ?? undefined;
+      const adwId = url.searchParams.get("adw_id") ?? undefined;
+      if (adwId) {
+        return json(getEventsByAdwId(adwId, limit));
+      }
       return json(getRecentEvents(limit, repoUrl));
     }
 
@@ -216,6 +222,16 @@ const server = Bun.serve({
     if (phaseMatch && req.method === "GET") {
       const adwId = decodeURIComponent(phaseMatch[1]);
       return json({ adw_id: adwId, phases: getRunPhases(adwId) });
+    }
+
+    // --- Phase detail summary (T055) ---
+    // GET /api/runs/:adw_id/phase/:phase/summary
+    // Returns status, duration, event counts, and phase-specific artifacts.
+    const phaseSummaryMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/phase\/([^/]+)\/summary$/);
+    if (phaseSummaryMatch && req.method === "GET") {
+      const adwId = decodeURIComponent(phaseSummaryMatch[1]);
+      const phase = decodeURIComponent(phaseSummaryMatch[2]);
+      return json(getRunPhaseSummary(adwId, phase));
     }
 
     // --- Lessons feed (knowledge base) ---
@@ -471,14 +487,70 @@ const server = Bun.serve({
       }
     }
 
-    // GET /api/cleo/tasks?parent=TXXX — direct children of an epic/task
+    // GET /api/cleo/tasks?parent=TXXX[&include_depends=1] — direct children of an epic/task
     if (url.pathname === "/api/cleo/tasks" && req.method === "GET") {
       const parentId = url.searchParams.get("parent");
       if (!parentId) return json({ error: "parent query param required" }, 400);
+      const includeDepends = url.searchParams.get("include_depends") === "1";
       try {
-        return json({ tasks: getTasksByParent(parentId) });
+        return json({ tasks: getTasksByParent(parentId, includeDepends) });
       } catch (e: any) {
         return json({ tasks: [], error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // ============================================================
+    // CLEO write endpoints (T052)
+    // ============================================================
+
+    // POST /api/cleo/task — create a new task
+    if (url.pathname === "/api/cleo/task" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as CreateTaskBody;
+        const result = createTask(body);
+        return json(result, result.ok ? 201 : 422);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // POST /api/cleo/task/:id/note — append a timestamped note
+    const noteMatch = url.pathname.match(/^\/api\/cleo\/task\/([^/]+)\/note$/);
+    if (noteMatch && req.method === "POST") {
+      const id = decodeURIComponent(noteMatch[1]);
+      try {
+        const body = (await req.json()) as { text?: string };
+        if (!body.text?.trim()) return json({ error: "text is required" }, 400);
+        const result = addTaskNote(id, body.text.trim());
+        return json(result, result.ok ? 200 : 422);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // PATCH /api/cleo/task/:id/status — change task status
+    const statusMatch = url.pathname.match(/^\/api\/cleo\/task\/([^/]+)\/status$/);
+    if (statusMatch && req.method === "PATCH") {
+      const id = decodeURIComponent(statusMatch[1]);
+      try {
+        const body = (await req.json()) as { status?: string };
+        if (!body.status) return json({ error: "status is required" }, 400);
+        const result = updateTaskStatus(id, body.status);
+        return json(result, result.ok ? 200 : 422);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // POST /api/cleo/task/:id/queue — queue a task for dispatch
+    const queueMatch = url.pathname.match(/^\/api\/cleo\/task\/([^/]+)\/queue$/);
+    if (queueMatch && req.method === "POST") {
+      const id = decodeURIComponent(queueMatch[1]);
+      try {
+        const result = await queueTask(id);
+        return json(result, result.ok ? 200 : 422);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
       }
     }
 
@@ -501,6 +573,102 @@ const server = Bun.serve({
         return json(getCleoStats());
       } catch (e: any) {
         return json({ total: 0, done: 0, active: 0, pending: 0, blocked: 0, error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // ============================================================
+    // POST /api/command — operator command bar dispatch (T053)
+    // ============================================================
+    if (url.pathname === "/api/command" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as {
+          type: string;
+          issue?: number;
+          taskId?: string;
+          message?: string;
+          text?: string;
+        };
+
+        if (body.type === "status") {
+          try {
+            const health = await fetch("http://localhost:8088/health", {
+              signal: AbortSignal.timeout(5000),
+            });
+            const data = await health.json();
+            return json({ type: "status", data });
+          } catch {
+            return json({
+              type: "status",
+              data: { status: "ok", service: "tac-master-dashboard", clients: clients.size },
+            });
+          }
+        }
+
+        if (body.type === "dispatch") {
+          if (!body.issue) return json({ error: "issue number required" }, 400);
+          return json({ type: "dispatch", ok: true, issue: body.issue });
+        }
+
+        if (body.type === "queue") {
+          if (!body.taskId) return json({ error: "taskId required" }, 400);
+          const proc = Bun.spawnSync(
+            ["cleo", "update", body.taskId, "--status", "pending"],
+            { timeout: 10_000 }
+          );
+          if (proc.exitCode !== 0) {
+            const stderr = new TextDecoder().decode(proc.stderr);
+            return json({ type: "queue", ok: false, error: stderr.trim() || "cleo update failed" }, 500);
+          }
+          return json({ type: "queue", ok: true, taskId: body.taskId });
+        }
+
+        if (body.type === "note") {
+          if (!body.taskId || !body.message) {
+            return json({ error: "taskId and message required" }, 400);
+          }
+          const now = new Date().toISOString().slice(0, 10);
+          const note = `${now}: ${body.message}`;
+          const proc = Bun.spawnSync(
+            ["cleo", "note", body.taskId, note],
+            { timeout: 10_000 }
+          );
+          if (proc.exitCode !== 0) {
+            const stderr = new TextDecoder().decode(proc.stderr);
+            return json({ type: "note", ok: false, error: stderr.trim() || "cleo note failed" }, 500);
+          }
+          return json({ type: "note", ok: true, taskId: body.taskId });
+        }
+
+        if (body.type === "freetext") {
+          if (!body.text?.trim()) return json({ error: "text required" }, 400);
+          const title = `Operator: ${body.text.trim().slice(0, 60)}`;
+          const proc = Bun.spawn(
+            [
+              "gh", "issue", "create",
+              "--repo", "kryptobaseddev/tac-master",
+              "--title", title,
+              "--label", "adw",
+              "--body", body.text.trim(),
+            ],
+            { stdout: "pipe", stderr: "pipe" }
+          );
+          const [issueStdout, issueStderr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+          ]);
+          const exitCode = await proc.exited;
+          if (exitCode !== 0) {
+            return json(
+              { type: "dispatched", ok: false, error: issueStderr.trim() || "gh issue create failed" },
+              500
+            );
+          }
+          return json({ type: "dispatched", ok: true, issue_url: issueStdout.trim() });
+        }
+
+        return json({ error: `unknown command type: ${body.type}` }, 400);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
       }
     }
 

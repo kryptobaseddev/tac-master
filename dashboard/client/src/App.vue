@@ -21,8 +21,15 @@ import LiveExecutionPanel from "./components/LiveExecutionPanel.vue";
 // Sidebar — CLEO task tree
 import EpicTaskTree from "./components/command-center/EpicTaskTree.vue";
 
+// Phase detail modal (T055)
+import PhaseDetailModal from "./components/PhaseDetailModal.vue";
+
 // System Logs viewer
 import SystemLogs from "./components/SystemLogs.vue";
+
+// T053: Operator command bar + toast notifications
+import CommandBar from "./components/CommandBar.vue";
+import Toast from "./components/Toast.vue";
 
 // Legacy pages (repos, config)
 import RepoBoard from "./components/RepoBoard.vue";
@@ -30,6 +37,20 @@ import ConfigPage from "./components/ConfigPage.vue";
 
 // ── Store ─────────────────────────────────────────────────────────
 const store = useOrchestratorStore();
+
+// ── Phase detail modal state (T055) ──────────────────────────────
+const phaseModalVisible = ref(false);
+const phaseModalAdwId = ref<string | null>(null);
+const phaseModalPhase = ref<string | null>(null);
+
+function openPhaseModal(payload: { adwId: string; phase: string }): void {
+  phaseModalAdwId.value = payload.adwId;
+  phaseModalPhase.value = payload.phase;
+  phaseModalVisible.value = true;
+}
+function closePhaseModal(): void {
+  phaseModalVisible.value = false;
+}
 
 // ── Tab routing ───────────────────────────────────────────────────
 type Tab = "dashboard" | "repos" | "config" | "logs";
@@ -108,7 +129,7 @@ onMounted(() => {
       <!-- Dashboard view: panels -->
       <template v-if="activeTab === 'dashboard'">
         <ActiveAgentsPanel />
-        <PipelineFlow />
+        <PipelineFlow @phase-click="openPhaseModal" />
         <IssueDetails />
       </template>
 
@@ -136,11 +157,27 @@ onMounted(() => {
       <LiveExecutionPanel />
     </template>
 
+    <!-- ── Command bar (T053) ────────────────────────────── -->
+    <template #commandbar>
+      <CommandBar />
+    </template>
+
     <!-- ── Status bar ─────────────────────────────────────── -->
     <template #statusbar>
       <StatusBar />
     </template>
   </CommandCenterLayout>
+
+  <!-- ── Toast overlay (T053) ──────────────────────────────── -->
+  <Toast />
+
+  <!-- ── Phase detail modal (T055) ─────────────────────────── -->
+  <PhaseDetailModal
+    :visible="phaseModalVisible"
+    :adw-id="phaseModalAdwId"
+    :phase="phaseModalPhase"
+    @close="closePhaseModal"
+  />
 </template>
 
 <style>
