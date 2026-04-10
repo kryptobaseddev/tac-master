@@ -353,32 +353,38 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
 
     // Collect thinking blocks for this adw_id
     thinkingBlocks.value.forEach((block) => {
-      blocks.push({
-        type: "thinking",
-        id: block.id,
-        timestamp: block.timestamp,
-        data: block,
-      });
+      if (block.orchestrator_agent_id === adwId) {
+        blocks.push({
+          type: "thinking",
+          id: block.id,
+          timestamp: block.timestamp,
+          data: block,
+        });
+      }
     });
 
     // Collect tool use blocks for this adw_id
     toolUseBlocks.value.forEach((block) => {
-      blocks.push({
-        type: "tool_use",
-        id: block.id,
-        timestamp: block.timestamp,
-        data: block,
-      });
+      if (block.orchestrator_agent_id === adwId) {
+        blocks.push({
+          type: "tool_use",
+          id: block.id,
+          timestamp: block.timestamp,
+          data: block,
+        });
+      }
     });
 
     // Collect text blocks for this adw_id
     textBlocks.value.forEach((block) => {
-      blocks.push({
-        type: "text",
-        id: block.id,
-        timestamp: block.timestamp,
-        data: block,
-      });
+      if (block.orchestrator_agent_id === adwId) {
+        blocks.push({
+          type: "text",
+          id: block.id,
+          timestamp: block.timestamp,
+          data: block,
+        });
+      }
     });
 
     // Collect agent status blocks for this adw_id
