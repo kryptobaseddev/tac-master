@@ -42,6 +42,7 @@ const viewMode = computed(() => store.viewMode);
 // ── Nav tabs ─────────────────────────────────────────────────────
 const tabs = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "agents",    label: "Agents"    },
   { id: "repos",     label: "Repos"     },
   { id: "config",    label: "Config"    },
 ] as const;

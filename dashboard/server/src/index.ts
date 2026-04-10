@@ -369,7 +369,8 @@ const server = Bun.serve({
       try {
         const limit = Number(url.searchParams.get("limit") ?? 50);
         const adws = getAdwsWithEvents(limit);
-        return json(adws);
+        // Wrap in object so frontend store can do: data.adws || []
+        return json({ adws });
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
       }

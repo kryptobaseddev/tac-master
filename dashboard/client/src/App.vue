@@ -40,6 +40,9 @@ import SystemLogs from "./components/SystemLogs.vue";
 // T126: ADW Swimlanes view
 import AdwSwimlanes from "./components/AdwSwimlanes.vue";
 
+// T142: Dedicated Agents page
+import AgentsPage from "./components/AgentsPage.vue";
+
 // T053: Operator command bar + toast notifications
 import CommandBar from "./components/CommandBar.vue";
 import Toast from "./components/Toast.vue";
@@ -79,7 +82,7 @@ function closePhaseModal(): void {
 }
 
 // ── Tab routing ───────────────────────────────────────────────────
-type Tab = "dashboard" | "repos" | "config" | "logs";
+type Tab = "dashboard" | "agents" | "repos" | "config" | "logs";
 const activeTab = ref<Tab>("dashboard");
 
 // ── Right panel tabs (T104) ────────────────────────────────────
@@ -211,6 +214,12 @@ onMounted(() => {
         </div>
       </template>
 
+      <!-- Agents page (T142) -->
+      <AgentsPage
+        v-else-if="activeTab === 'agents'"
+        class="cc-page"
+      />
+
       <!-- System logs page -->
       <SystemLogs
         v-else-if="activeTab === 'logs'"
@@ -243,11 +252,14 @@ onMounted(() => {
             Execution
           </button>
           <button
-            class="right-panel-tab"
+            class="right-panel-tab right-panel-tab--chat"
             :class="{ 'right-panel-tab--active': rightPanelTab === 'chat' }"
             @click="rightPanelTab = 'chat'"
+            title="Chat with Orchestrator AI"
           >
+            <span class="chat-tab-icon">&#x1F4AC;</span>
             Chat
+            <span class="chat-tab-badge" v-if="rightPanelTab !== 'chat'">AI</span>
           </button>
         </div>
         <div class="right-panel-content">
@@ -347,6 +359,34 @@ html, body, #app {
 .right-panel-tab--active {
   color: #00ffcc;
   border-bottom-color: #00ffcc;
+}
+
+/* Chat tab with AI badge */
+.right-panel-tab--chat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-tab-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.chat-tab-badge {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+  color: white;
+  animation: chat-badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes chat-badge-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
 }
 
 .right-panel-content {

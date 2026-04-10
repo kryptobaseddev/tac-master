@@ -1015,8 +1015,10 @@ export function getOperatorLog(limit = 50): OperatorLogEntry[] {
 
 function startOfTodayUnix(): number {
   const now = new Date();
+  // Use UTC midnight so token_ledger data is not missed due to server timezone offset.
+  // All attributed_at values are Unix timestamps (UTC), so we compare against UTC midnight.
   return Math.floor(
-    new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000,
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000,
   );
 }
 
