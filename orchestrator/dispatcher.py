@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 from pathlib import Path
@@ -208,7 +209,10 @@ class Dispatcher:
         # path after the fact in reap_finished_runs.
         wt_path = handle.clone_path / "trees" / adw_id
 
-        self.store.create_run(adw_id, repo.url, issue.number, workflow, repo.model_set)
+        # Extract CLEO task ID from issue title (if present)
+        cleo_task_id = self._extract_cleo_task_id(issue.title)
+
+        self.store.create_run(adw_id, repo.url, issue.number, workflow, repo.model_set, cleo_task_id)
         self.store.update_run(adw_id, worktree_path=str(wt_path), status="running")
         self.budget.record_dispatch(repo.url)
 
@@ -232,7 +236,11 @@ class Dispatcher:
         except Exception as e:
             log.warning("Knowledge injection failed (non-fatal): %s", e)
 
-        env = self._build_env(repo, handle)
+        # Inject CLEO task context (acceptance criteria, task ID) into worktree
+        # This is non-blocking — failures should not prevent dispatch.
+        self._inject_cleo_context(issue.title, issue.body, wt_path)
+
+        env = self._build_env(repo, handle, cleo_task_id)
         log_file = self.cfg.logs_dir / f"run_{adw_id}.log"
 
         log.info("Dispatching %s for %s#%d (adw_id=%s) via %s [runtime=%s]",
@@ -287,7 +295,84 @@ class Dispatcher:
         return True
 
     # ------------------------------------------------------------------
-    def _build_env(self, repo: RepoConfig, handle: RepoHandle) -> dict[str, str]:
+    def _extract_cleo_task_id(self, issue_title: str) -> str | None:
+        """Extract CLEO task ID from issue title.
+
+        Matches the pattern [TXXX] at the start of the title.
+        Returns the task ID (e.g., "T084") or None if not found.
+        """
+        match = re.match(r'\[?(T\d+)\]?', issue_title)
+        if match:
+            return match.group(1)
+        return None
+
+    def _inject_cleo_context(self, issue_title: str, issue_body: str, wt_path: Path) -> None:
+        """Inject CLEO task context into the worktree as .cleo_context.md.
+
+        Extracts:
+          - CLEO task ID from issue title [TXXX] prefix
+          - Acceptance criteria from issue body (- [ ] lines)
+
+        Writes .cleo_context.md to worktree root with task ID, title, and acceptance criteria.
+        This is non-blocking: failures here should not prevent dispatch.
+        """
+        try:
+            cleo_task_id = self._extract_cleo_task_id(issue_title)
+            if not cleo_task_id:
+                # No CLEO task ID found — skip injection
+                return
+
+            # Extract acceptance criteria from issue body
+            # Look for lines matching "- [ ] ..." pattern
+            acceptance_criteria = []
+            if issue_body:
+                for line in issue_body.split('\n'):
+                    line = line.strip()
+                    if line.startswith('- [ ]'):
+                        # Extract the criterion text (after "- [ ] ")
+                        criterion = line[5:].strip()
+                        if criterion:
+                            acceptance_criteria.append(criterion)
+
+            # Strip [TXXX] prefix from issue title for the display title
+            title_match = re.match(r'\[?T\d+\]?\s*(.*)', issue_title)
+            display_title = title_match.group(1) if title_match else issue_title
+
+            # Build the criteria list (as markdown checklist)
+            criteria_md = ""
+            if acceptance_criteria:
+                criteria_md = "\n".join(f"- [ ] {c}" for c in acceptance_criteria)
+            else:
+                criteria_md = "(No acceptance criteria specified)"
+
+            # Build the context file content
+            context_content = f"""# CLEO Task Context
+
+**Task ID**: {cleo_task_id}
+**Task Title**: {display_title}
+
+## Acceptance Criteria
+
+The following acceptance criteria MUST all be satisfied before this task is considered complete:
+
+{criteria_md}
+
+## Instructions
+
+You are working on CLEO task {cleo_task_id}. Your goal is to satisfy all of the above acceptance criteria. When you have completed the work, confirm each criterion is met in your final summary.
+"""
+
+            # Write to worktree root
+            wt_path.mkdir(parents=True, exist_ok=True)
+            context_file = wt_path / ".cleo_context.md"
+            context_file.write_text(context_content)
+            log.info("Injected CLEO context into %s for task %s", context_file, cleo_task_id)
+
+        except Exception as e:
+            log.warning("CLEO context injection failed (non-blocking): %s", e)
+
+    # ------------------------------------------------------------------
+    def _build_env(self, repo: RepoConfig, handle: RepoHandle, cleo_task_id: str | None = None) -> dict[str, str]:
         env = os.environ.copy()
         # NOTE: identity.get(key, default) only uses `default` if the key is
         # MISSING, not if the value is an empty string. The loader stores
@@ -309,6 +394,9 @@ class Dispatcher:
             # http://localhost:4000/events which works from inside the LXC.
             "TAC_DASHBOARD_URL": env.get("TAC_DASHBOARD_URL") or "http://localhost:4000/events",
         })
+        # Add CLEO_TASK_ID env var if present
+        if cleo_task_id:
+            env["CLEO_TASK_ID"] = cleo_task_id
         # Per-repo env overrides
         for k, v in repo.env.items():
             env[k] = str(v)

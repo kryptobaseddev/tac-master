@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS runs (
     issue_number   INTEGER NOT NULL,
     workflow       TEXT NOT NULL,
     model_set      TEXT NOT NULL,
+    cleo_task_id   TEXT,           -- CLEO task ID if dispatched from a CLEO task (e.g., "T084")
     worktree_path  TEXT,
     status         TEXT NOT NULL,  -- pending | running | succeeded | failed | aborted
     started_at     INTEGER,
@@ -189,12 +190,12 @@ class StateStore:
     # ----- runs -----
 
     def create_run(self, adw_id: str, repo_url: str, issue_number: int,
-                   workflow: str, model_set: str) -> None:
+                   workflow: str, model_set: str, cleo_task_id: str | None = None) -> None:
         with self.conn() as c:
             c.execute(
                 """INSERT INTO runs (adw_id, repo_url, issue_number, workflow, model_set,
-                   status, started_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)""",
-                (adw_id, repo_url, issue_number, workflow, model_set, int(time.time())),
+                   cleo_task_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                (adw_id, repo_url, issue_number, workflow, model_set, cleo_task_id, int(time.time())),
             )
 
     def update_run(self, adw_id: str, **kwargs) -> None:
@@ -224,6 +225,15 @@ class StateStore:
                 "SELECT * FROM runs WHERE status IN ('pending', 'running')"
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_cleo_task_id(self, adw_id: str) -> str | None:
+        """Returns the CLEO task ID for a given adw_id, or None if not set."""
+        with self.conn() as c:
+            row = c.execute(
+                "SELECT cleo_task_id FROM runs WHERE adw_id=?",
+                (adw_id,),
+            ).fetchone()
+            return row["cleo_task_id"] if row else None
 
     # ----- phases -----
 
