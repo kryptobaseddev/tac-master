@@ -1010,6 +1010,17 @@ export function getTurnCount(orchestratorAgentId: string): number {
  * Get the most recently created active orchestrator session.
  * Queries orchestrator_agents WHERE archived=0 ORDER BY created_at DESC LIMIT 1.
  * Returns null if no active session exists.
+ *
+ * Alias for getActiveOrchestrator for backward compatibility.
+ */
+export function getOrchestrator(): OrchestratorAgent | null {
+  return getActiveOrchestrator();
+}
+
+/**
+ * Get the most recently created active orchestrator session.
+ * Queries orchestrator_agents WHERE archived=0 ORDER BY created_at DESC LIMIT 1.
+ * Returns null if no active session exists.
  */
 export function getActiveOrchestrator(): OrchestratorAgent | null {
   if (!tacDb) return null;

@@ -178,3 +178,17 @@ export interface FilterOptions {
   hook_event_types: string[];
   repo_urls: string[];
 }
+
+export interface OrchestratorChatPayload {
+  message: string;
+  orchestrator_agent_id: string;
+}
+
+export interface OrchestratorStatusPayload {
+  id: string;
+  session_id: string | null;
+  status: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_cost: number;
+}

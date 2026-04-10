@@ -30,6 +30,7 @@ import {
   getTurnCount,
   getActiveOrchestrator,
   getSystemLogs,
+  getOrchestrator,
 } from "./db";
 import {
   getReposConfig,
@@ -48,7 +49,7 @@ import {
   retryIssue,
   type RepoEntry,
 } from "./config";
-import type { HookEvent, WsMessage } from "./types";
+import type { HookEvent, WsMessage, OrchestratorChatPayload, OrchestratorStatusPayload } from "./types";
 import { WebSocketManager } from "./ws-manager";
 import { getEpics, getTasksByParent, getTaskById, getCleoStats, addTaskNote, updateTaskStatus, createTask, queueTask, getTaskLinks, type CreateTaskBody } from "./cleo-api";
 import { readFile } from "node:fs/promises";
@@ -780,6 +781,117 @@ const server = Bun.serve({
         const turn_count = getTurnCount(body.orchestrator_agent_id);
 
         return json({ messages, turn_count }, 200);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // ============================================================
+    // Orchestrator proxy endpoints (T096)
+    // ============================================================
+
+    // POST /orchestrator-chat — proxy to Python orchestrator service at :4001/chat
+    // Body: { message: string, orchestrator_agent_id: string }
+    // Returns: 202 (accepted) if successful, 502 (bad gateway) on orchestrator error
+    if (url.pathname === "/orchestrator-chat" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as OrchestratorChatPayload;
+        if (!body.message?.trim()) {
+          return json({ error: "message is required" }, 400);
+        }
+        if (!body.orchestrator_agent_id?.trim()) {
+          return json({ error: "orchestrator_agent_id is required" }, 400);
+        }
+
+        // Proxy the request to the Python orchestrator service
+        const response = await fetch(`${process.env.ORCHESTRATOR_URL ?? "http://localhost:4001"}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: body.message.trim(),
+            orchestrator_id: body.orchestrator_agent_id.trim(),
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          return json(
+            { error: `orchestrator service error: ${errorText}` },
+            502,
+          );
+        }
+
+        return json({ ok: true, message: body.message.trim() }, 202);
+      } catch (e: any) {
+        return json(
+          { error: `orchestrator proxy failed: ${String(e?.message ?? e)}` },
+          502,
+        );
+      }
+    }
+
+    // GET /orchestrator — return current orchestrator session status
+    // Returns: { id, session_id, status, input_tokens, output_tokens, total_cost }
+    if (url.pathname === "/orchestrator" && req.method === "GET") {
+      try {
+        const orchestrator = getOrchestrator();
+        if (!orchestrator) {
+          return json({ error: "no active orchestrator session" }, 404);
+        }
+        const payload: OrchestratorStatusPayload = {
+          id: orchestrator.id,
+          session_id: orchestrator.session_id,
+          status: orchestrator.status,
+          input_tokens: orchestrator.input_tokens,
+          output_tokens: orchestrator.output_tokens,
+          total_cost: orchestrator.total_cost,
+        };
+        return json(payload, 200);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // GET /orchestrator-chat/history — return chat messages and system logs for current session
+    // Query params: limit (default 50)
+    // Returns: { messages: ChatMessage[], logs: SystemLog[], session_id: string }
+    if (url.pathname === "/orchestrator-chat/history" && req.method === "GET") {
+      try {
+        const orchestrator = getOrchestrator();
+        if (!orchestrator) {
+          return json({ error: "no active orchestrator session" }, 404);
+        }
+
+        const limit = Number(url.searchParams.get("limit") ?? 50);
+        const messages = getChatHistory(orchestrator.id, limit);
+        const logs = orchestrator.session_id ? getSystemLogs(orchestrator.session_id, limit * 2) : [];
+
+        // Merge messages and logs by timestamp, sorted ascending
+        const allItems = [
+          ...messages.map((m) => ({
+            type: "message" as const,
+            timestamp: m.created_at,
+            data: m,
+          })),
+          ...logs.map((l) => ({
+            type: "log" as const,
+            timestamp: l.timestamp,
+            data: l,
+          })),
+        ];
+
+        allItems.sort((a, b) => a.timestamp - b.timestamp);
+
+        return json(
+          {
+            session_id: orchestrator.session_id,
+            items: allItems,
+            message_count: messages.length,
+            log_count: logs.length,
+          },
+          200,
+        );
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
       }
