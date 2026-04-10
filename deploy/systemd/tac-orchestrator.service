@@ -18,7 +18,7 @@ Environment=UV_PYTHON_INSTALL_DIR=/srv/tac-master/state/uv-python
 Environment=ORCHESTRATOR_PORT=4001
 Environment=ORCHESTRATOR_HOST=0.0.0.0
 Environment=ORCHESTRATOR_LOG_LEVEL=info
-ExecStart=/home/krypto/.local/bin/uv run python -m orchestrator.orchestrator_main
+ExecStart=/home/krypto/.local/bin/uv run orchestrator/orchestrator_main.py
 Restart=on-failure
 RestartSec=5
 # Give the orchestrator time to finish any active execution on shutdown
