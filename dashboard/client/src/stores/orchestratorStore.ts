@@ -32,7 +32,6 @@ import type {
   AgentLog,
   AgentStatus,
   AppStats,
-  ChatMessage,
   EventCategory,
   EventStreamEntry,
   LogLevel,
@@ -260,20 +259,13 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   });
-
   const eventStreamEntries = ref<EventStreamEntry[]>([]);
   const autoScroll = ref(true);
-
   const repos = ref<RepoStatus[]>([]);
-
   const isConnected = ref(false);
   const wsConnection = ref<WebSocket | null>(null);
   const websocketEventCount = ref(0);
   const commandInputVisible = ref(false);
-
-  // --- chat state ---
-  const chatMessages = ref<ChatMessage[]>([]);
-  const isTyping = ref(false);
 
   // --- getters ---
   const activeAgents = computed(() =>
@@ -378,72 +370,6 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     eventStreamEntries.value = events.map((e, i) => hookToEventStreamEntry(e, i));
   }
 
-  // --- chat actions ---
-
-  function addChatMessage(msg: ChatMessage): void {
-    chatMessages.value.push(msg);
-  }
-
-  /**
-   * Send a user message to the orchestrator via /api/chat endpoint.
-   * Creates and appends a user ChatMessage to chatMessages BEFORE posting
-   * to support optimistic UI updates. Handles 404/error gracefully.
-   */
-  async function sendUserMessage(content: string): Promise<void> {
-    if (!content.trim()) return;
-
-    // Create user message optimistically
-    const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      sender: "user",
-      type: "text",
-      content,
-      timestamp: new Date().toISOString(),
-    };
-    addChatMessage(userMsg);
-
-    try {
-      const response = await fetch("/api/chat/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: content,
-          orchestrator_agent_id: orchestratorAgentId.value,
-        }),
-      });
-
-      // Gracefully handle errors — don't throw, just log
-      if (!response.ok) {
-        console.warn(`[store] POST /api/chat/send failed: ${response.status}`, response.statusText);
-      }
-    } catch (err) {
-      console.error("[store] sendUserMessage error:", err);
-      // Continue gracefully — optimistic message is already in chatMessages
-    }
-  }
-
-  /**
-   * Convert a UserPromptSubmit HookEvent into a ChatMessage entry.
-   * Called from ws.onmessage when a hook_event_type === "UserPromptSubmit" arrives.
-   * This allows prompts submitted by agents to appear in the chat history.
-   */
-  function handleUserPromptSubmit(event: HookEvent): void {
-    if (event.hook_event_type !== "UserPromptSubmit") return;
-
-    const payload = event.payload as any || {};
-    const promptText = String(payload.prompt || "").trim();
-    if (!promptText) return;
-
-    const chatMsg: ChatMessage = {
-      id: `msg-${event.id ?? event.session_id}-${event.timestamp}`,
-      sender: "user",
-      type: "text",
-      content: promptText,
-      timestamp: event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString(),
-    };
-    addChatMessage(chatMsg);
-  }
-
   // --- HTTP bootstrap ---
 
   async function loadInitial() {
@@ -488,10 +414,6 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
             break;
           case "event":
             addHookEvent(msg.data);
-            // Convert UserPromptSubmit HookEvents to ChatMessage entries
-            if (msg.data.hook_event_type === "UserPromptSubmit") {
-              handleUserPromptSubmit(msg.data);
-            }
             break;
           case "run_update":
             upsertRun(msg.data);
@@ -518,44 +440,56 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   }
 
   return {
-    // state
+    // --- PUBLIC STATE ---
+    /** Array of tac-master runs mapped to Agent shape */
     agents,
+    /** Currently selected agent ID for filtering logs */
     selectedAgentId,
-    orchestratorAgent,
+    /** Orchestrator agent ID (usually "tac-master") */
     orchestratorAgentId,
+    /** Orchestrator agent metadata and cost tracking */
+    orchestratorAgent,
+    /** Event stream entries (hook events from all agents) */
     eventStreamEntries,
+    /** Auto-scroll enabled flag for event stream */
     autoScroll,
+    /** Repository status from /api/repos */
     repos,
+    /** WebSocket connection state */
     isConnected,
+    /** Count of WebSocket messages received */
     websocketEventCount,
-    chatMessages,
-    isTyping,
+    /** Command input visibility toggle */
+    commandInputVisible,
 
-    // getters
+    // --- PUBLIC GETTERS ---
+    /** Active agents (not archived, status !== complete) */
     activeAgents,
+    /** Agents with status === 'executing' */
     runningAgents,
+    /** All agents sorted by recency (running first, then by started_at desc) */
     recentAgents,
+    /** Currently selected agent or null */
     selectedAgent,
+    /** Event stream filtered to selected agent or all if none selected */
     filteredEventStream,
+    /** Computed stats: active, running, logs, cost */
     stats,
+    /** Total tokens used across all repos today */
     totalTokensToday,
 
-    // actions
+    // --- PUBLIC ACTIONS ---
+    /** Initialize store: load initial data and establish WebSocket */
     initialize,
+    /** Load initial runs, repos, and recent events via HTTP */
     loadInitial,
+    /** Select an agent by ID (null to deselect) */
     selectAgent,
+    /** Toggle auto-scroll on event stream */
     toggleAutoScroll,
+    /** Clear all event stream entries */
     clearEventStream,
+    /** Toggle command input visibility */
     toggleCommandInput,
-    upsertRun,
-    upsertRepo,
-    addHookEvent,
-    hydrateFromInitial,
-    addChatMessage,
-    sendUserMessage,
-    handleUserPromptSubmit,
-
-    // command input state
-    commandInputVisible,
   };
 });
