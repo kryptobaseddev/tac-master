@@ -152,6 +152,8 @@ export interface RunSummary {
   input_tokens?: number;
   output_tokens?: number;
   total_cost_usd?: number;
+  // T097: CLEO task ID if this run was dispatched from a CLEO task
+  cleo_task_id?: string | null;
 }
 
 export interface RepoStatus {

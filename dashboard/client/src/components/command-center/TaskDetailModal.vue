@@ -138,7 +138,7 @@
                 </ul>
               </section>
 
-              <!-- GitHub Issue Link -->
+              <!-- GitHub Issue Link (from description/notes) -->
               <section v-if="store.activeModal.github_url" class="tdm-section">
                 <div class="tdm-section-label">GITHUB ISSUE</div>
                 <div class="tdm-github-row">
@@ -153,6 +153,27 @@
                     View on GitHub →
                   </a>
                 </div>
+              </section>
+
+              <!-- External Task Links (linked GitHub issues) -->
+              <section v-if="store.activeModal.external_links && store.activeModal.external_links.length > 0" class="tdm-section">
+                <div class="tdm-section-label">LINKED ISSUES</div>
+                <ul class="tdm-external-links-list">
+                  <li v-for="link in store.activeModal.external_links" :key="link.id" class="tdm-external-link-item">
+                    <span class="tdm-link-icon">&#128279;</span>
+                    <span class="tdm-link-text">{{ externalLinkLabel(link) }}</span>
+                    <a
+                      v-if="link.external_url"
+                      class="tdm-external-link"
+                      :href="link.external_url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open in GitHub"
+                    >
+                      →
+                    </a>
+                  </li>
+                </ul>
               </section>
 
               <!-- Labels -->
@@ -405,6 +426,13 @@ function githubLabel(url: string): string {
   // Extract "owner/repo#N" from URL
   const m = url.match(/github\.com\/([\w-]+\/[\w-]+)\/issues\/(\d+)/);
   return m ? `${m[1]}#${m[2]}` : url;
+}
+
+function externalLinkLabel(link: any): string {
+  // Format: provider (e.g., github) and external_id (e.g., kryptobaseddev/tac-master#123)
+  if (link.external_title) return link.external_title;
+  if (link.external_id) return link.external_id;
+  return `${link.provider_id}/${link.external_id}`;
 }
 
 function navigateToTask(taskId: string | null | undefined): void {
@@ -799,6 +827,48 @@ function navigateToTask(taskId: string | null | undefined): void {
   transition: background 0.15s;
 }
 .tdm-github-link:hover { background: #1a3050; }
+
+/* External Links */
+.tdm-external-links-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tdm-external-link-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  background: #0d1117;
+  border: 1px solid #21262d;
+}
+.tdm-link-icon { font-size: 12px; flex-shrink: 0; }
+.tdm-link-text {
+  flex: 1;
+  color: #8b949e;
+  font-size: 10px;
+  font-family: ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tdm-external-link {
+  color: #58a6ff;
+  text-decoration: none;
+  font-size: 10px;
+  flex-shrink: 0;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: #0d1f38;
+  border: 1px solid #1a3050;
+  transition: background 0.15s;
+  cursor: pointer;
+}
+.tdm-external-link:hover { background: #1a3050; }
 
 /* Labels */
 .tdm-labels-row {

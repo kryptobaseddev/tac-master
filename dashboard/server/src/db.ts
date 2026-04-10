@@ -320,6 +320,7 @@ export function getActiveAndRecentRuns(limit = 50): RunSummary[] {
     input_tokens: r.tl_input_tokens ?? 0,
     output_tokens: r.tl_output_tokens ?? 0,
     total_cost_usd: r.tl_cost_usd ?? 0,
+    cleo_task_id: r.cleo_task_id ?? null,
   }));
 }
 

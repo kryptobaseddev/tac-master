@@ -492,6 +492,175 @@ class Dispatcher:
             log.warning("CLEO context injection failed (non-blocking): %s", e)
 
     # ------------------------------------------------------------------
+    def create_issue_from_task(
+        self, task_id: str, repo_config: RepoConfig
+    ) -> "Issue | None":
+        """Create a GitHub issue from a CLEO task and store the mapping.
+
+        Reads the CLEO task via `cleo show {task_id}`, builds a GitHub issue
+        with:
+          - Title: "[{task_id}] {task_title}"
+          - Body:  task description + acceptance criteria as checkboxes
+          - Labels: ["adw"]
+
+        Stores the resulting cleo_task_id on the matching agent_instances row
+        (via the runs.adw_id join key) so the mapping is bidirectional.
+
+        Returns the created Issue on success, or None on any failure.
+        This method is non-blocking — failures are logged but never raised.
+        """
+        try:
+            task = self._fetch_cleo_task_details(task_id)
+            if not task:
+                log.warning(
+                    "create_issue_from_task: could not fetch CLEO task %s", task_id
+                )
+                return None
+
+            title = f"[{task_id}] {task.get('title', task_id)}"
+
+            # Build issue body: description then acceptance criteria checkboxes
+            description = task.get("description", "").strip()
+            acceptance: list[str] = task.get("acceptance") or []
+
+            body_parts: list[str] = []
+            if description:
+                body_parts.append(description)
+            if acceptance:
+                body_parts.append("\n## Acceptance Criteria\n")
+                body_parts.extend(f"- [ ] {criterion}" for criterion in acceptance)
+
+            body = "\n".join(body_parts) if body_parts else f"CLEO task {task_id}"
+
+            issue = self.gh.create_issue(
+                repo_config.url,
+                title=title,
+                body=body,
+                labels=["adw"],
+            )
+            if issue is None:
+                log.warning(
+                    "create_issue_from_task: GitHub issue creation failed for %s", task_id
+                )
+                return None
+
+            log.info(
+                "Created GitHub issue %s#%d for CLEO task %s",
+                repo_config.url, issue.number, task_id,
+            )
+
+            # Store mapping: update agent_instances rows that link to this adw
+            # via runs.cleo_task_id so the CLEO task ID is findable from agent side.
+            # Also update the runs row directly since that's the primary join key.
+            self.store.set_agent_instance_cleo_task_id(
+                adw_id=f"cleo:{task_id}",  # logical key before adw_id allocated
+                cleo_task_id=task_id,
+            )
+
+            self.store.record_event(
+                "cleo_issue_created",
+                json.dumps({
+                    "cleo_task_id": task_id,
+                    "repo_url": repo_config.url,
+                    "issue_number": issue.number,
+                    "issue_url": issue.html_url,
+                }),
+                repo_url=repo_config.url,
+            )
+            return issue
+
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "create_issue_from_task failed for %s (non-blocking): %s", task_id, e
+            )
+            return None
+
+    # ------------------------------------------------------------------
+    def _create_followup_task(
+        self, cleo_task_id: str, adw_id: str, reason: str
+    ) -> None:
+        """Create a follow-up CLEO task for a failed or incomplete ADW run.
+
+        Adds a child task under cleo_task_id with:
+          title: "Fix: {reason} in ADW {adw_id}"
+          priority: high
+
+        Appends the new task ID as a note on the parent for traceability.
+        Skips creation if the parent task title starts with "Fix:" to prevent
+        infinite follow-up chains.
+        Non-blocking — failures are logged as warnings, never raised.
+        """
+        try:
+            # Guard: don't create follow-ups for tasks that are themselves follow-ups.
+            parent = self._fetch_cleo_task_details(cleo_task_id)
+            if parent and parent.get("title", "").startswith("Fix:"):
+                log.debug(
+                    "_create_followup_task: skipping follow-up for %s — title starts with 'Fix:'",
+                    cleo_task_id,
+                )
+                return
+
+            followup_title = f"Fix: {reason} in ADW {adw_id}"
+            result = subprocess.run(
+                [
+                    "cleo", "add",
+                    "--parent", cleo_task_id,
+                    "--title", followup_title,
+                    "--priority", "high",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                log.warning(
+                    "_create_followup_task: cleo add failed for %s (rc=%d): %s",
+                    cleo_task_id, result.returncode, result.stderr.strip(),
+                )
+                return
+
+            # Extract the new task ID from cleo add output (JSON or last word)
+            new_task_id: str | None = None
+            try:
+                import json as _json
+                out_data = _json.loads(result.stdout)
+                new_task_id = (
+                    out_data.get("data", {}).get("task", {}).get("id")
+                    or out_data.get("id")
+                )
+            except Exception:
+                # Non-JSON output — try parsing last token
+                tokens = result.stdout.strip().split()
+                if tokens:
+                    candidate = tokens[-1].strip(".,")
+                    if re.match(r"T\d+", candidate):
+                        new_task_id = candidate
+
+            note = (
+                f"Follow-up task created: {new_task_id or '(see cleo)'} "
+                f"for ADW {adw_id} failure"
+            )
+            try:
+                subprocess.run(
+                    ["cleo", "note", cleo_task_id, note],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.debug("_create_followup_task: cleo note failed (non-blocking): %s", e)
+
+            log.info(
+                "Created follow-up task %s for %s (ADW %s reason: %s)",
+                new_task_id or "(unknown)", cleo_task_id, adw_id, reason,
+            )
+
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "_create_followup_task failed for %s (non-blocking): %s", cleo_task_id, e
+            )
+
+    # ------------------------------------------------------------------
     def _build_env(self, repo: RepoConfig, handle: RepoHandle, cleo_task_id: str | None = None) -> dict[str, str]:
         env = os.environ.copy()
         # NOTE: identity.get(key, default) only uses `default` if the key is
@@ -651,6 +820,22 @@ class Dispatcher:
                 self._update_cleo_task_status(adw_id, final_status)
             except Exception as e:
                 log.warning("CLEO task status update failed for %s: %s", adw_id, e)
+
+            # Create follow-up CLEO task for failed/incomplete runs.
+            # Non-blocking — must not crash the reap loop.
+            if final_status in ("failed", "incomplete"):
+                try:
+                    cleo_task_id = self.store.get_cleo_task_id(adw_id)
+                    if cleo_task_id:
+                        self._create_followup_task(
+                            cleo_task_id=cleo_task_id,
+                            adw_id=adw_id,
+                            reason=final_status,
+                        )
+                except Exception as e:
+                    log.warning(
+                        "Follow-up CLEO task creation failed for %s: %s", adw_id, e
+                    )
 
             # Run reflection (self-improvement lesson writer) — fire and forget.
             # Failures here should not block the daemon or reap cycle.

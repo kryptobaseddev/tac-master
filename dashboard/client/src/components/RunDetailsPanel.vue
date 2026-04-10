@@ -95,6 +95,7 @@ const tabCounts = computed(() => ({
 const repoSlug = computed(() => agent.value?.metadata?.repo_slug ?? "");
 const repoUrl = computed(() => agent.value?.metadata?.repo_url ?? "");
 const issueNumber = computed(() => agent.value?.metadata?.issue_number ?? null);
+const cleoTaskId = computed(() => agent.value?.metadata?.cleo_task_id ?? null);
 
 // T033: role badge
 const agentRole = computed(() => inferRole(agent.value?.adw_id ?? null, agent.value?.adw_step ?? null));
@@ -254,6 +255,10 @@ function statusColor(s: string | null): string {
             <a :href="`${repoUrl}/issues/${issueNumber}`" target="_blank" class="v link">
               #{{ issueNumber }}
             </a>
+          </div>
+          <div v-if="cleoTaskId">
+            <span class="k">cleo task</span>
+            <span class="v mono">{{ cleoTaskId }}</span>
           </div>
           <div v-if="agent.working_dir">
             <span class="k">worktree</span>

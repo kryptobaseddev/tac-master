@@ -108,6 +108,7 @@ function runToAgent(run: RunSummary): Agent {
       ended_at_unix: run.ended_at,
       runtime: "native",
       run_status: run.status,
+      cleo_task_id: run.cleo_task_id ?? undefined,
     },
     task: `${slug} · issue #${run.issue_number}`,
     log_count: 0,
