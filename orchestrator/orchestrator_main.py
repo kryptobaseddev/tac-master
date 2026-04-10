@@ -2,416 +2,407 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#   "aiohttp>=3.9",
+#   "fastapi>=0.110",
+#   "uvicorn>=0.30",
 #   "pyyaml>=6.0",
 #   "python-dotenv>=1.0",
 #   "httpx>=0.27",
 # ]
 # ///
-"""Python-side HTTP server exposing OrchestratorService streaming endpoints.
 
-Runs on port 4001 and provides:
-  - POST /send_chat: Accept user message, trigger orchestrator processing
-  - GET /api/chat/history: Retrieve chat history for hydration
+"""tac-orchestrator HTTP server entry point.
 
-Streams responses via WebSocket connection to the dashboard /events endpoint
-(fire-and-forget — orchestrator does not wait for delivery confirmation).
+Minimal async HTTP server (FastAPI/uvicorn on port 4001) that acts as the
+entry point for the tac-orchestrator systemd service.
 
-This is the T106 implementation of the Python orchestrator bridge.
+Startup sequence:
+  1. Load tac-master config to resolve the SQLite path.
+  2. Read active session_id from SQLite via OrchestratorAgentModel.get_active().
+  3. Initialise OrchestratorService (with session resumption when an active
+     session_id is found).
+  4. Start uvicorn on port 4001.
+
+Endpoints:
+  POST /chat         — Accepts {message, orchestrator_id?}, fires
+                       OrchestratorService.process_user_message() as an
+                       asyncio background task, returns 202 immediately.
+  GET  /status       — Returns {status, session_id, cost_usd,
+                       input_tokens, output_tokens}.
+  POST /interrupt    — Calls OrchestratorService.interrupt(), returns 200.
+
+SIGTERM handling:
+  The SIGTERM signal is caught and converted to a clean FastAPI/uvicorn
+  shutdown.  The lifespan shutdown hook waits for any active execution to
+  complete (max 30s), then logs "Graceful shutdown complete" and exits.
 
 Usage:
-    uv run orchestrator/orchestrator_main.py              # foreground, daemon
-    ORCHESTRATOR_PORT=4001 uv run orchestrator/orchestrator_main.py
+    uv run python -m orchestrator.orchestrator_main
+    TAC_MASTER_HOME=/path/to/tac-master uv run python -m orchestrator.orchestrator_main
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
+import signal
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
-# Make orchestrator package importable when run as a script
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# ---------------------------------------------------------------------------
+# Path bootstrap — make tac-master root importable when invoked as __main__
+# ---------------------------------------------------------------------------
 
-from aiohttp import web
+_ORCHESTRATOR_DIR = Path(__file__).resolve().parent
+_TAC_MASTER_ROOT = _ORCHESTRATOR_DIR.parent
+if str(_TAC_MASTER_ROOT) not in sys.path:
+    sys.path.insert(0, str(_TAC_MASTER_ROOT))
 
-from .orchestrator_service import OrchestratorService
+# deferred imports after path is set up
+import uvicorn  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
-log = logging.getLogger(__name__)
+from orchestrator.config import load_config  # noqa: E402
+from orchestrator.orchestrator_agent import OrchestratorAgentModel  # noqa: E402
+from orchestrator.orchestrator_service import OrchestratorService  # noqa: E402
 
-# Global orchestrator instance (one per process)
-_orchestrator: Optional[OrchestratorService] = None
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+log = logging.getLogger("orchestrator_main")
 
-# ============================================================================
-# Setup and initialization
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Global service state (set during lifespan startup)
+# ---------------------------------------------------------------------------
 
+_service: OrchestratorService | None = None
 
-def init_orchestrator(
-    db_path: Optional[str] = None,
-    dashboard_url: str = "http://localhost:4000",
-    system_prompt_path: Optional[str] = None,
-    working_dir: Optional[str] = None,
-    model: str = "sonnet",
-) -> OrchestratorService:
-    """Initialize the global OrchestratorService singleton.
+# uvicorn Server instance (set in main()) — used by the SIGTERM handler to
+# request a graceful shutdown without killing the process immediately.
+_uvicorn_server: uvicorn.Server | None = None
 
-    Parameters
-    ----------
-    db_path:
-        Path to tac_master.sqlite. If None, searches standard locations.
-    dashboard_url:
-        Base URL of the Bun dashboard (default http://localhost:4000).
-        Events are POSTed to {dashboard_url}/events.
-    system_prompt_path:
-        Path to the orchestrator_system.md template. If None, uses default.
-    working_dir:
-        CWD for the claude CLI subprocess. If None, defaults to tac-master root.
-    model:
-        Claude model alias (default "sonnet").
-
-    Returns
-    -------
-    OrchestratorService
-        The initialized orchestrator instance.
-    """
-    global _orchestrator
-
-    if _orchestrator is not None:
-        return _orchestrator
-
-    # Resolve db_path
-    if db_path is None:
-        candidates = [
-            Path(__file__).parent.parent / "tac_master.sqlite",
-            Path("/srv/tac-master/tac_master.sqlite"),
-            Path("/var/lib/tac-master/tac_master.sqlite"),
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                db_path = str(candidate)
-                break
-        if db_path is None:
-            raise RuntimeError(
-                "Could not find tac_master.sqlite. "
-                "Provide db_path or ensure it exists in a standard location."
-            )
-
-    # Resolve working_dir
-    if working_dir is None:
-        working_dir = str(Path(__file__).parent.parent)
-
-    log.info(
-        "Initializing OrchestratorService (db=%s, model=%s, cwd=%s)",
-        db_path,
-        model,
-        working_dir,
-    )
-
-    _orchestrator = OrchestratorService(
-        db_path=db_path,
-        dashboard_url=dashboard_url,
-        system_prompt_path=system_prompt_path,
-        working_dir=working_dir,
-        model=model,
-    )
-
-    return _orchestrator
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
 
 
-# ============================================================================
-# HTTP Request Handlers
-# ============================================================================
+class ChatRequest(BaseModel):
+    message: str
+    orchestrator_id: str | None = None
 
 
-async def handle_send_chat(request: web.Request) -> web.Response:
-    """POST /send_chat — Forward user message to orchestrator and stream response.
+# ---------------------------------------------------------------------------
+# Lifespan — startup and shutdown
+# ---------------------------------------------------------------------------
 
-    Request body:
-      {
-        "message": "user message text",
-        "orchestrator_agent_id": "orch-xxxxx" (optional, for logging)
-      }
 
-    Returns 200 immediately (fire-and-forget). The orchestrator streams
-    its response asynchronously via POST /events to the dashboard.
+@asynccontextmanager
+async def _lifespan(app: FastAPI):  # noqa: ARG001
+    """FastAPI lifespan context manager — startup then teardown."""
+    global _service
 
-    Returns 503 if orchestrator is busy processing another message.
+    # ── Startup ──────────────────────────────────────────────────────────
+    log.info("tac-orchestrator starting on port 4001")
 
-    Error responses:
-      - 400: Missing or empty message field
-      - 503: Orchestrator is busy
-      - 500: Internal error
-    """
-    if _orchestrator is None:
-        return web.json_response(
-            {"error": "Orchestrator not initialized"},
-            status=500,
-        )
-
+    # Resolve db_path from tac-master config
+    db_path: str
     try:
-        body = await request.json()
+        cfg = load_config()
+        db_path = str(cfg.sqlite_path)
+        log.info("Using SQLite at %s", db_path)
     except Exception as exc:
-        log.warning("handle_send_chat: failed to parse JSON: %s", exc)
-        return web.json_response(
-            {"error": "Invalid JSON"},
-            status=400,
-        )
-
-    message = body.get("message", "").strip()
-    if not message:
-        return web.json_response(
-            {"error": "message is required and must not be empty"},
-            status=400,
-        )
-
-    # Check if orchestrator is busy
-    if _orchestrator.is_busy:
         log.warning(
-            "handle_send_chat: orchestrator is busy; returning 503"
+            "Config load failed (%s) — falling back to default SQLite path", exc
         )
-        return web.json_response(
-            {"error": "Orchestrator is busy processing another message"},
-            status=503,
+        db_path = str(_TAC_MASTER_ROOT / "state" / "tac_master.sqlite")
+
+    # Read active session_id for resumption
+    session_id: str | None = None
+    try:
+        probe = OrchestratorAgentModel(db_path)
+        try:
+            active = probe.get_active()
+        finally:
+            probe.close()
+
+        if active is not None:
+            session_id = active.get("session_id")
+            if session_id:
+                short = session_id[:20] if len(session_id) > 20 else session_id
+                log.info("Resuming existing Claude SDK session %s…", short)
+            else:
+                log.info(
+                    "Active orchestrator row found (id=%s) but no session_id — fresh session",
+                    active.get("id"),
+                )
+        else:
+            log.info("No active orchestrator row found — starting fresh session")
+    except Exception as exc:
+        log.warning(
+            "Could not read active session from DB (%s) — starting fresh", exc
         )
 
-    # Fire-and-forget: spawn the processing task and return immediately
-    asyncio.create_task(_process_message_async(message))
+    # Build OrchestratorService
+    try:
+        _service = OrchestratorService(
+            db_path=db_path,
+            dashboard_url=os.getenv("DASHBOARD_URL", "http://localhost:4000"),
+            session_id=session_id,
+            model=os.getenv("ORCHESTRATOR_MODEL", "sonnet"),
+        )
+        log.info(
+            "OrchestratorService ready (session_id=%s)",
+            session_id or "<new>",
+        )
+    except Exception as exc:
+        log.error("Failed to initialise OrchestratorService: %s", exc, exc_info=True)
+        raise
 
-    return web.json_response(
-        {
-            "ok": True,
-            "message": "Message queued for processing",
-        },
-        status=200,
-    )
+    yield  # hand control to uvicorn
+
+    # ── Shutdown ──────────────────────────────────────────────────────────
+    log.info("tac-orchestrator lifespan: waiting for active execution to finish…")
+
+    if _service is not None and _service.is_busy:
+        try:
+            deadline = 30.0
+            elapsed = 0.0
+            step = 0.5
+            while _service.is_busy and elapsed < deadline:
+                await asyncio.sleep(step)
+                elapsed += step
+
+            if _service.is_busy:
+                log.warning(
+                    "Execution still active after %.0fs — proceeding with shutdown",
+                    deadline,
+                )
+            else:
+                log.info("Active execution finished cleanly (waited %.1fs)", elapsed)
+        except Exception as exc:
+            log.warning("Error while waiting for execution to complete: %s", exc)
+
+    if _service is not None:
+        try:
+            _service.close()
+        except Exception as exc:
+            log.warning("OrchestratorService.close() raised: %s", exc)
+        finally:
+            _service = None
+
+    log.info("Graceful shutdown complete")
 
 
-async def handle_chat_history(request: web.Request) -> web.Response:
-    """GET /api/chat/history — Retrieve chat history for the active orchestrator.
+# ---------------------------------------------------------------------------
+# FastAPI application
+# ---------------------------------------------------------------------------
 
-    Query parameters:
-      - limit (default 50): Maximum number of messages to return
+app = FastAPI(
+    title="tac-orchestrator",
+    version="0.1",
+    description="Async HTTP entry point for the tac-master orchestrator service",
+    lifespan=_lifespan,
+)
+
+# ---------------------------------------------------------------------------
+# Endpoint: POST /chat
+# ---------------------------------------------------------------------------
+
+
+@app.post("/chat", status_code=202)
+async def post_chat(request: ChatRequest) -> JSONResponse:
+    """Receive a user message and trigger OrchestratorService processing.
+
+    Fires OrchestratorService.process_user_message() as an asyncio background
+    task and returns 202 immediately.  The service streams responses back to
+    the dashboard via HTTP POST to the /events endpoint.
+
+    Body:
+        message         (str, required)  — the user's chat message
+        orchestrator_id (str, optional)  — ignored; kept for API compatibility
 
     Returns:
-      {
-        "messages": [
-          {
-            "id": "msg-xxxx",
-            "orchestrator_agent_id": "orch-xxxx",
-            "sender_type": "user" | "orchestrator",
-            "message": "text",
-            "metadata": {},
-            "created_at": 1234567890,
-            "updated_at": 1234567890
-          },
-          ...
-        ]
-      }
-
-    Error responses:
-      - 500: Failed to retrieve history
+        202 {"status": "accepted"} on success
+        400 if message is empty
+        503 if service is not initialised
     """
-    if _orchestrator is None:
-        return web.json_response(
-            {"error": "Orchestrator not initialized"},
-            status=500,
+    if _service is None:
+        return JSONResponse(
+            {"error": "OrchestratorService not initialised"},
+            status_code=503,
         )
 
-    try:
-        limit = int(request.rel_url.query.get("limit", 50))
-        limit = max(1, min(limit, 1000))  # Clamp to [1, 1000]
-    except ValueError:
-        limit = 50
+    message = request.message.strip()
+    if not message:
+        return JSONResponse(
+            {"error": "message must not be empty"},
+            status_code=400,
+        )
 
-    try:
-        messages = await _orchestrator.load_chat_history(limit=limit)
-        return web.json_response(
+    async def _drain() -> None:
+        """Consume the async generator returned by process_user_message.
+
+        OrchestratorService._run_phases() POSTs events to the dashboard
+        internally, so we just drain the iterator to drive the coroutine.
+        """
+        try:
+            result = await _service.process_user_message(message)
+            async for _ in result:
+                pass  # events are broadcast inside _run_phases
+        except Exception as exc:
+            log.error("Background /chat task failed: %s", exc, exc_info=True)
+
+    asyncio.create_task(_drain())
+    return JSONResponse({"status": "accepted"}, status_code=202)
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: GET /status
+# ---------------------------------------------------------------------------
+
+
+@app.get("/status")
+async def get_status() -> JSONResponse:
+    """Return the current orchestrator status and accumulated metrics.
+
+    Response body:
+        status        — "idle" | "executing" | "unavailable"
+        session_id    — Claude SDK session id (or null)
+        cost_usd      — accumulated USD cost for this session
+        input_tokens  — total input tokens consumed
+        output_tokens — total output tokens generated
+
+    Reads cost/token totals live from the orchestrator_agents table.
+    """
+    if _service is None:
+        return JSONResponse(
             {
-                "messages": messages,
-                "count": len(messages),
-            },
-            status=200,
+                "status": "unavailable",
+                "session_id": None,
+                "cost_usd": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
         )
+
+    status = "executing" if _service.is_busy else "idle"
+    session_id = _service.session_id
+
+    cost_usd = 0.0
+    input_tokens = 0
+    output_tokens = 0
+    try:
+        from orchestrator.db_repositories import OrchestratorAgentRepo
+
+        with _service._agent_model._conn as conn:
+            row = OrchestratorAgentRepo.get(conn, _service._orchestrator_id)
+            if row is not None:
+                cost_usd = float(row.get("total_cost") or 0.0)
+                input_tokens = int(row.get("input_tokens") or 0)
+                output_tokens = int(row.get("output_tokens") or 0)
     except Exception as exc:
-        log.error("handle_chat_history: failed to load history: %s", exc)
-        return web.json_response(
-            {"error": "Failed to retrieve chat history"},
-            status=500,
-        )
+        log.warning("Could not read cost metrics from DB: %s", exc)
 
-
-async def handle_health(request: web.Request) -> web.Response:
-    """GET /health — Service health check."""
-    if _orchestrator is None:
-        return web.json_response(
-            {
-                "status": "starting",
-                "service": "orchestrator",
-                "is_busy": False,
-            },
-            status=503,
-        )
-
-    return web.json_response(
+    return JSONResponse(
         {
-            "status": "ok",
-            "service": "orchestrator",
-            "is_busy": _orchestrator.is_busy,
-        },
-        status=200,
+            "status": status,
+            "session_id": session_id,
+            "cost_usd": cost_usd,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
     )
 
 
-# ============================================================================
-# Background task: Consume orchestrator stream and POST to dashboard
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Endpoint: POST /interrupt
+# ---------------------------------------------------------------------------
 
 
-async def _process_message_async(message: str) -> None:
-    """Process a user message through the orchestrator async stream.
+@app.post("/interrupt")
+async def post_interrupt() -> JSONResponse:
+    """Interrupt the currently executing Claude SDK subprocess.
 
-    Consumes the OrchestratorService.process_user_message() async iterator
-    and logs/broadcasts any exceptions (never raises to callers).
+    Safe to call when nothing is executing (no-op, returns 200).
 
-    This runs in a detached task so the HTTP handler can return immediately.
+    Returns:
+        200 {"status": "interrupted"} always (unless service unavailable)
+        503 if service is not initialised
     """
-    if _orchestrator is None:
-        log.error("_process_message_async: orchestrator not initialized")
-        return
-
-    try:
-        log.info("_process_message_async: starting for message: %s", message[:80])
-
-        # Iterate over the streaming response. OrchestratorService yields
-        # TextBlock, ThinkingBlock, ToolUseBlock, ResultMessage events.
-        # Each event is independently POSTed to the dashboard /events endpoint
-        # by OrchestratorService._post_event() (fire-and-forget).
-        event_count = 0
-        async for event in _orchestrator.process_user_message(message):
-            event_count += 1
-            # Just consume the stream — OrchestratorService handles all
-            # event broadcasting internally.
-            log.debug("_process_message_async: received event %d: %s", event_count, type(event).__name__)
-
-        log.info(
-            "_process_message_async: completed (processed %d events)",
-            event_count,
+    if _service is None:
+        return JSONResponse(
+            {"error": "OrchestratorService not initialised"},
+            status_code=503,
         )
 
-    except Exception as exc:
-        log.error("_process_message_async: exception in stream: %s", exc, exc_info=True)
+    await _service.interrupt()
+    return JSONResponse({"status": "interrupted"})
 
 
-# ============================================================================
-# Logging setup
-# ============================================================================
+# ---------------------------------------------------------------------------
+# SIGTERM handler
+# ---------------------------------------------------------------------------
 
 
-def setup_logging(level: str = "INFO") -> None:
-    """Configure logging for the orchestrator service."""
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-    log.info("Logging configured at %s level", level)
+def _install_sigterm_handler() -> None:
+    """Install a SIGTERM handler that initiates a clean uvicorn shutdown.
 
-
-# ============================================================================
-# Main entry point
-# ============================================================================
-
-
-async def main(
-    port: int = 4001,
-    db_path: Optional[str] = None,
-    dashboard_url: str = "http://localhost:4000",
-    system_prompt_path: Optional[str] = None,
-    working_dir: Optional[str] = None,
-    model: str = "sonnet",
-) -> None:
-    """Run the orchestrator HTTP server.
-
-    Parameters
-    ----------
-    port:
-        HTTP server port (default 4001).
-    db_path:
-        Path to tac_master.sqlite. If None, searches standard locations.
-    dashboard_url:
-        Base URL of the Bun dashboard (default http://localhost:4000).
-    system_prompt_path:
-        Path to the orchestrator_system.md template. If None, uses default.
-    working_dir:
-        CWD for the claude CLI subprocess. If None, defaults to tac-master root.
-    model:
-        Claude model alias (default "sonnet").
+    uvicorn monitors its own Server.should_exit flag.  We set it here so
+    that the server begins draining connections and triggers the lifespan
+    teardown (which waits for active executions before logging the final
+    "Graceful shutdown complete" message).
     """
-    setup_logging(os.environ.get("LOG_LEVEL", "INFO"))
+    def _handler(signum: int, frame: Any) -> None:  # noqa: ARG001
+        log.info("Received signal %d — initiating graceful shutdown", signum)
+        if _uvicorn_server is not None:
+            _uvicorn_server.should_exit = True
+        else:
+            # Fallback: raise SystemExit so Python unwinds cleanly
+            raise SystemExit(0)
 
-    # Initialize orchestrator
-    orchestrator = init_orchestrator(
-        db_path=db_path,
-        dashboard_url=dashboard_url,
-        system_prompt_path=system_prompt_path,
-        working_dir=working_dir,
-        model=model,
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT, _handler)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """Start the uvicorn HTTP server on port 4001."""
+    global _uvicorn_server
+
+    port = int(os.getenv("ORCHESTRATOR_PORT", "4001"))
+    host = os.getenv("ORCHESTRATOR_HOST", "0.0.0.0")
+    log_level = os.getenv("ORCHESTRATOR_LOG_LEVEL", "info").lower()
+
+    config = uvicorn.Config(
+        app=app,
+        host=host,
+        port=port,
+        log_level=log_level,
+        # Give the lifespan shutdown handler up to 35s
+        # (30s wait + 5s buffer for cleanup)
+        timeout_graceful_shutdown=35,
     )
 
-    # Create aiohttp app
-    app = web.Application()
+    _uvicorn_server = uvicorn.Server(config)
+    _install_sigterm_handler()
 
-    # Register routes
-    app.router.add_post("/send_chat", handle_send_chat)
-    app.router.add_get("/api/chat/history", handle_chat_history)
-    app.router.add_get("/health", handle_health)
-
-    # Create and start runner
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "localhost", port)
-    await site.start()
-
-    log.info("Orchestrator server listening on http://localhost:%d", port)
-
-    # Keep the server running
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except KeyboardInterrupt:
-        log.info("Orchestrator server shutting down...")
-        await runner.cleanup()
-        if orchestrator:
-            orchestrator.close()
+    log.info("Starting uvicorn on %s:%d", host, port)
+    _uvicorn_server.run()
 
 
 if __name__ == "__main__":
-    # Allow environment variable overrides
-    port = int(os.environ.get("ORCHESTRATOR_PORT", 4001))
-    db_path = os.environ.get("TAC_MASTER_DB")
-    dashboard_url = os.environ.get("DASHBOARD_URL", "http://localhost:4000")
-    system_prompt_path = os.environ.get("SYSTEM_PROMPT_PATH")
-    working_dir = os.environ.get("TAC_MASTER_CWD")
-    model = os.environ.get("ORCHESTRATOR_MODEL", "sonnet")
-
-    try:
-        asyncio.run(
-            main(
-                port=port,
-                db_path=db_path,
-                dashboard_url=dashboard_url,
-                system_prompt_path=system_prompt_path,
-                working_dir=working_dir,
-                model=model,
-            )
-        )
-    except KeyboardInterrupt:
-        sys.exit(0)
-    except Exception as exc:
-        log.error("Fatal error: %s", exc, exc_info=True)
-        sys.exit(1)
+    main()
