@@ -100,6 +100,15 @@ export function getRecentEvents(limit = 100, repoUrl?: string): HookEvent[] {
   return rows.reverse().map(rowToEvent);
 }
 
+export function getEventsByAdwId(adwId: string, limit = 200): HookEvent[] {
+  const rows = db()
+    .prepare(
+      `SELECT * FROM events WHERE adw_id = ? ORDER BY timestamp ASC LIMIT ?`,
+    )
+    .all(adwId, limit) as any[];
+  return rows.map(rowToEvent);
+}
+
 export function getFilterOptions(): FilterOptions {
   const sourceApps = (
     db().prepare("SELECT DISTINCT source_app FROM events").all() as any[]
@@ -389,6 +398,249 @@ function normPhase(raw: string): string {
   if (!raw) return raw;
   if (raw.endsWith("_iso")) return raw;
   return `${raw}_iso`;
+}
+
+// ---------------------------------------------------------------------------
+// Phase summary for /api/runs/:adw_id/phase/:phase/summary (T055)
+// ---------------------------------------------------------------------------
+
+export interface PhaseSummary {
+  phase: string;
+  adw_id: string;
+  status: string;
+  duration_seconds: number | null;
+  first_event_ts: number | null;
+  last_event_ts: number | null;
+  event_counts: Record<string, number>;
+  total_events: number;
+  artifacts: PhaseArtifacts;
+}
+
+export interface PhaseArtifacts {
+  // classify
+  classified_as?: string;
+  // plan
+  spec_file?: string;
+  // build
+  branch?: string;
+  commits?: number;
+  files_changed?: number;
+  commit_message?: string;
+  // test
+  passed?: number;
+  failed?: number;
+  auto_fixed?: number;
+  // review
+  review_status?: string;
+  // document
+  docs_committed?: boolean;
+  // ship
+  pr_number?: number;
+  pr_url?: string;
+  merged?: boolean;
+  // reflect
+  lesson_written?: boolean;
+  lesson_summary?: string;
+}
+
+/**
+ * Derive phase artifacts from the events payload JSON column.
+ * The payload field varies per hook event type, so we look for
+ * relevant keys across all events for this adw_id + phase.
+ */
+function getPhaseArtifacts(adwId: string, phase: string): PhaseArtifacts {
+  const normKey = normPhase(phase);
+  const phaseLabel = normKey.replace("_iso", "");
+
+  // Fetch all payload strings for this adw_id + phase combo
+  type PayloadRow = { payload: string };
+  const payloadRows = db()
+    .prepare(
+      `SELECT payload FROM events
+       WHERE adw_id = ? AND (phase = ? OR phase = ?)
+       ORDER BY timestamp ASC`,
+    )
+    .all(adwId, phase, normKey) as PayloadRow[];
+
+  const payloads: Array<Record<string, unknown>> = payloadRows
+    .map((r) => {
+      try { return JSON.parse(r.payload) as Record<string, unknown>; }
+      catch { return {}; }
+    });
+
+  const art: PhaseArtifacts = {};
+
+  // Helper: find first non-empty string value across all payloads
+  function findStr(key: string): string | undefined {
+    for (const p of payloads) {
+      const v = p[key];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return undefined;
+  }
+  function findNum(key: string): number | undefined {
+    for (const p of payloads) {
+      const v = p[key];
+      if (typeof v === "number") return v;
+      if (typeof v === "string" && /^\d+$/.test(v)) return Number(v);
+    }
+    return undefined;
+  }
+  function findBool(key: string): boolean | undefined {
+    for (const p of payloads) {
+      if (key in p) return !!p[key];
+    }
+    return undefined;
+  }
+
+  switch (phaseLabel) {
+    case "classify": {
+      const cls = findStr("classified_as") ?? findStr("classification") ?? findStr("issue_type");
+      if (cls) art.classified_as = cls;
+      break;
+    }
+    case "plan": {
+      const sf = findStr("spec_file") ?? findStr("spec_path") ?? findStr("plan_file");
+      if (sf) art.spec_file = sf;
+      break;
+    }
+    case "build": {
+      const branch = findStr("branch") ?? findStr("branch_name");
+      if (branch) art.branch = branch;
+      const commits = findNum("commits") ?? findNum("commit_count");
+      if (commits != null) art.commits = commits;
+      const files = findNum("files_changed") ?? findNum("files");
+      if (files != null) art.files_changed = files;
+      const msg = findStr("commit_message") ?? findStr("commit_msg");
+      if (msg) art.commit_message = msg;
+      break;
+    }
+    case "test": {
+      const passed = findNum("passed") ?? findNum("tests_passed");
+      if (passed != null) art.passed = passed;
+      const failed = findNum("failed") ?? findNum("tests_failed");
+      if (failed != null) art.failed = failed;
+      const fixed = findNum("auto_fixed") ?? findNum("fixed");
+      if (fixed != null) art.auto_fixed = fixed;
+      break;
+    }
+    case "review": {
+      const rs = findStr("review_status") ?? findStr("review_result");
+      if (rs) art.review_status = rs;
+      break;
+    }
+    case "document": {
+      const dc = findBool("docs_committed") ?? findBool("docs_written");
+      if (dc != null) art.docs_committed = dc;
+      break;
+    }
+    case "ship": {
+      const prNum = findNum("pr_number") ?? findNum("pr_num");
+      if (prNum != null) art.pr_number = prNum;
+      const prUrl = findStr("pr_url") ?? findStr("pull_request_url");
+      if (prUrl) art.pr_url = prUrl;
+      const merged = findBool("merged") ?? findBool("pr_merged");
+      if (merged != null) art.merged = merged;
+      break;
+    }
+    case "reflect": {
+      const lw = findBool("lesson_written") ?? findBool("lesson_saved");
+      if (lw != null) art.lesson_written = lw;
+      const ls = findStr("lesson_summary") ?? findStr("lesson");
+      if (ls) art.lesson_summary = ls;
+      break;
+    }
+  }
+
+  // If we got nothing from events, try the tac_master lessons table for reflect phase
+  if (phaseLabel === "reflect" && !art.lesson_summary && tacDb) {
+    try {
+      const lesson = tacDb
+        .prepare(`SELECT title, result FROM lessons WHERE adw_id = ? ORDER BY created_at DESC LIMIT 1`)
+        .get(adwId) as { title: string; result: string | null } | undefined;
+      if (lesson) {
+        art.lesson_written = true;
+        art.lesson_summary = lesson.result ?? lesson.title;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // For build phase: try to pick up branch info from run's worktree_path
+  if (phaseLabel === "build" && !art.branch && tacDb) {
+    try {
+      const run = tacDb
+        .prepare(`SELECT worktree_path FROM runs WHERE adw_id = ? LIMIT 1`)
+        .get(adwId) as { worktree_path: string | null } | undefined;
+      if (run?.worktree_path) {
+        // worktree_path often ends in a branch name component
+        const parts = run.worktree_path.split("/");
+        if (parts.length > 0) art.branch = parts[parts.length - 1];
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return art;
+}
+
+export function getRunPhaseSummary(adwId: string, phase: string): PhaseSummary {
+  const normKey = normPhase(phase);
+
+  // Event counts by type, with timestamps
+  type EventRow = { hook_event_type: string; count: number; first_ts: number; last_ts: number };
+  const eventRows = db()
+    .prepare(
+      `SELECT hook_event_type,
+              COUNT(*) AS count,
+              MIN(timestamp) AS first_ts,
+              MAX(timestamp) AS last_ts
+       FROM events
+       WHERE adw_id = ? AND (phase = ? OR phase = ?)
+       GROUP BY hook_event_type`,
+    )
+    .all(adwId, phase, normKey) as EventRow[];
+
+  const eventCounts: Record<string, number> = {};
+  let totalEvents = 0;
+  let firstTs: number | null = null;
+  let lastTs: number | null = null;
+
+  for (const row of eventRows) {
+    eventCounts[row.hook_event_type] = row.count;
+    totalEvents += row.count;
+    if (firstTs == null || row.first_ts < firstTs) firstTs = row.first_ts;
+    if (lastTs == null || row.last_ts > lastTs) lastTs = row.last_ts;
+  }
+
+  // Duration in seconds (timestamps are ms-epoch if > 1e12, else seconds)
+  let durationSeconds: number | null = null;
+  if (firstTs != null && lastTs != null && lastTs > firstTs) {
+    const diff = lastTs - firstTs;
+    // Detect ms-epoch (> year 2001 in ms)
+    durationSeconds = diff > 1e9 ? Math.round(diff / 1000) : diff;
+  }
+
+  // Derive status from run status + phase position
+  const phases = getRunPhases(adwId);
+  const found = phases.find((p) => p.phase === normKey || p.phase === phase);
+  const status = found?.status ?? (totalEvents > 0 ? "completed" : "pending");
+
+  const artifacts = getPhaseArtifacts(adwId, phase);
+
+  return {
+    phase: normKey,
+    adw_id: adwId,
+    status,
+    duration_seconds: durationSeconds,
+    first_event_ts: firstTs,
+    last_event_ts: lastTs,
+    event_counts: eventCounts,
+    total_events: totalEvents,
+    artifacts,
+  };
 }
 
 export function getLessons(limit = 20): Array<{

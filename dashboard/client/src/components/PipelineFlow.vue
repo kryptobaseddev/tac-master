@@ -14,8 +14,9 @@
         <template v-for="(phase, idx) in phases" :key="phase.key">
           <div
             class="phase-node"
-            :class="[phaseClass(phase.key)]"
-            :title="phase.label"
+            :class="[phaseClass(phase.key), { 'phase-clickable': !!selectedRun }]"
+            :title="selectedRun ? `Click to view ${phase.label} details` : phase.label"
+            @click="onPhaseClick(phase.key)"
           >
             <div class="phase-icon-wrap">
               <!-- completed -->
@@ -60,16 +61,9 @@
         </template>
       </div>
 
-      <!-- Dependency graph placeholder -->
+      <!-- Dependency graph (T054) -->
       <div class="dep-graph-area">
-        <div v-if="!selectedRun" class="dep-graph-empty">
-          <span class="dep-icon">&#9671;</span>
-          <span class="dep-hint">Select a run to view dependency graph</span>
-        </div>
-        <div v-else class="dep-graph-placeholder">
-          <span class="dep-icon-sm">&#9671;</span>
-          <span class="dep-hint-sm">Dependency graph — coming soon</span>
-        </div>
+        <DependencyGraph :run="selectedRun" />
       </div>
     </div>
   </div>
@@ -87,9 +81,10 @@
  * @task T038
  * @epic T036
  */
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, onMounted } from "vue";
 import { useOrchestratorStore } from "../stores/orchestratorStore";
 import type { RunSummary } from "../types";
+import DependencyGraph from "./DependencyGraph.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -97,6 +92,10 @@ const props = withDefaults(
   }>(),
   { run: null },
 );
+
+const emit = defineEmits<{
+  (e: "phase-click", payload: { adwId: string; phase: string }): void;
+}>();
 
 const store = useOrchestratorStore();
 
@@ -119,10 +118,11 @@ type PhaseStatus = "completed" | "active" | "pending" | "failed";
 const phaseData = ref<Record<string, string>>({});
 const loadingPhases = ref(false);
 
-// Determine which run to display: prop > selected store agent
+// Determine which run to display: prop > selected store agent > most recent agent
 const selectedRun = computed<RunSummary | null>(() => {
   if (props.run) return props.run;
-  const agent = store.selectedAgent;
+  // Fall back to the most recently selected or most recent known agent
+  const agent = store.selectedAgent ?? store.recentAgents[0] ?? null;
   if (!agent) return null;
   // Reconstruct a minimal RunSummary from the agent shape
   const meta = agent.metadata ?? {};
@@ -212,6 +212,11 @@ function phaseClass(key: string): string {
 function connectorClass(key: string): string {
   const s = phaseStatus(key);
   return s === "completed" ? "connector-completed" : "connector-pending";
+}
+
+function onPhaseClick(phaseKey: string): void {
+  if (!selectedRun.value) return;
+  emit("phase-click", { adwId: selectedRun.value.adw_id, phase: phaseKey });
 }
 </script>
 
@@ -312,6 +317,17 @@ function connectorClass(key: string): string {
   gap: 5px;
   flex-shrink: 0;
   min-width: 64px;
+}
+
+.phase-clickable {
+  cursor: pointer;
+}
+.phase-clickable:hover .phase-icon-wrap {
+  opacity: 0.85;
+  transform: scale(1.08);
+}
+.phase-clickable:hover .phase-label {
+  opacity: 0.85;
 }
 
 .phase-icon-wrap {
@@ -436,30 +452,5 @@ function connectorClass(key: string): string {
   background: rgba(0, 0, 0, 0.15);
 }
 
-.dep-graph-empty,
-.dep-graph-placeholder {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.dep-icon {
-  font-size: 20px;
-  color: #374151;
-}
-
-.dep-icon-sm {
-  font-size: 14px;
-  color: #374151;
-}
-
-.dep-hint {
-  font-size: 11px;
-  color: #6b7280;
-}
-
-.dep-hint-sm {
-  font-size: 10px;
-  color: #6b7280;
-}
+/* DependencyGraph fills the dep-graph-area */
 </style>

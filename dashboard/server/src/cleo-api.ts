@@ -23,6 +23,7 @@ export interface TaskSummary {
   id:string; title:string; status:string; type:string|null; priority:string;
   size:string|null; parent_id:string|null; labels:string[]; acceptance:string[];
   children_count?:number; children_done?:number;
+  depends?:string[];
 }
 
 export interface TaskDetail extends TaskSummary {
@@ -40,6 +41,8 @@ const DB_CANDIDATES = [process.env.CLEO_TASKS_DB,"/srv/tac-master/state/cleo-tas
 function resolveDbPath(): string|null { for (const p of DB_CANDIDATES) { if (existsSync(p)) return p; } return null; }
 
 let _db: Database|null=null; let _dbPath: string|null=null;
+let _dbWrite: Database|null=null; let _dbWritePath: string|null=null;
+
 function getDb(): Database|null {
   const path=resolveDbPath(); if (!path) return null;
   if (_db && _dbPath===path) return _db;
@@ -48,8 +51,17 @@ function getDb(): Database|null {
   return _db;
 }
 
+function getDbWrite(): Database|null {
+  const path=resolveDbPath(); if (!path) return null;
+  if (_dbWrite && _dbWritePath===path) return _dbWrite;
+  try { if (_dbWrite) { try{_dbWrite.close();}catch{} } _dbWrite=new Database(path,{readonly:false,create:false}); _dbWritePath=path; console.log(`[cleo-api] opened write handle ${path}`); }
+  catch(e) { console.error("[cleo-api] DB write open failed:",e); _dbWrite=null; _dbWritePath=null; }
+  return _dbWrite;
+}
+
 function query<T>(sql:string, params:unknown[]=[]):T[]|null { const db=getDb(); if(!db) return null; try{return db.query(sql).all(...params) as T[];}catch(e){console.error("[cleo-api] query:",e);return null;} }
 function queryOne<T>(sql:string, params:unknown[]=[]):T|null { const db=getDb(); if(!db) return null; try{return (db.query(sql).get(...params)??null) as T|null;}catch(e){console.error("[cleo-api] queryOne:",e);return null;} }
+function execWrite(sql:string, params:unknown[]=[]): boolean { const db=getDbWrite(); if(!db) return false; try{db.query(sql).run(...params);return true;}catch(e){console.error("[cleo-api] execWrite:",e);return false;} }
 function parseJson<T>(raw:string|null|undefined,fallback:T):T { if(!raw) return fallback; try{return JSON.parse(raw) as T;}catch{return fallback;} }
 
 function rowToTask(r:Record<string,unknown>):TaskSummary {
@@ -140,8 +152,8 @@ export function getEpics():{epics:EpicSummary[];dbPath:string|null;error?:string
   return {epics,dbPath};
 }
 
-export function getTasksByParent(parentId:string):TaskSummary[] {
-  const rows=query<Record<string,unknown>>(`SELECT id,title,status,type,priority,size,parent_id,labels_json,acceptance_json FROM tasks WHERE parent_id=? AND (archived_at IS NULL OR archived_at='') ORDER BY position ASC, created_at ASC`,[parentId]);
+export function getTasksByParent(parentId:string, includeDepends=false):TaskSummary[] {
+  const rows=query<Record<string,unknown>>(`SELECT id,title,status,type,priority,size,parent_id,labels_json,acceptance_json${includeDepends?",blocked_by":""} FROM tasks WHERE parent_id=? AND (archived_at IS NULL OR archived_at='') ORDER BY position ASC, created_at ASC`,[parentId]);
   if (!rows) return [];
   return rows.map(r=>{
     const task=rowToTask(r);
@@ -150,6 +162,10 @@ export function getTasksByParent(parentId:string):TaskSummary[] {
     if(childRows && childRows.length>0) {
       task.children_count=childRows.length;
       task.children_done=childRows.filter(c=>DONE.has((c.status??"").toLowerCase())).length;
+    }
+    // Include depends (blocked_by) if requested
+    if(includeDepends) {
+      task.depends=parseJson<string[]>(r.blocked_by as string|null,[]);
     }
     return task;
   });
@@ -172,6 +188,106 @@ export function getCleoStats():CleoStats {
     else out.pending++;
   }
   return out;
+}
+
+// ============================================================
+// Write helpers
+// ============================================================
+
+function nowUtc():string { return new Date().toISOString().replace("T"," ").replace(/\.\d+Z$/," UTC"); }
+
+/**
+ * POST /api/cleo/task/:id/note
+ * Appends a timestamped note to the notes_json array.
+ */
+export function addTaskNote(id:string, text:string):{ok:boolean;error?:string} {
+  const row=queryOne<{notes_json:string|null}>(`SELECT notes_json FROM tasks WHERE id=?`,[id]);
+  if(!row) return {ok:false,error:"task not found"};
+  const notes=parseJson<string[]>(row.notes_json,[]);
+  notes.push(`${nowUtc()}: ${text}`);
+  const ok=execWrite(`UPDATE tasks SET notes_json=?, updated_at=? WHERE id=?`,[JSON.stringify(notes),new Date().toISOString(),id]);
+  return ok?{ok:true}:{ok:false,error:"write failed"};
+}
+
+const VALID_STATUSES=new Set(["pending","active","done","blocked","cancelled","failed"]);
+
+/**
+ * PATCH /api/cleo/task/:id/status
+ * Updates task status and sets completed_at when done.
+ */
+export function updateTaskStatus(id:string, status:string):{ok:boolean;error?:string} {
+  if(!VALID_STATUSES.has(status)) return {ok:false,error:`invalid status: ${status}`};
+  const row=queryOne<{id:string}>(`SELECT id FROM tasks WHERE id=?`,[id]);
+  if(!row) return {ok:false,error:"task not found"};
+  const now=new Date().toISOString();
+  const completedAt=["done","completed","succeeded"].includes(status)?now:null;
+  const ok=execWrite(
+    `UPDATE tasks SET status=?, updated_at=?, completed_at=COALESCE(?,completed_at) WHERE id=?`,
+    [status,now,completedAt,id]
+  );
+  return ok?{ok:true}:{ok:false,error:"write failed"};
+}
+
+/**
+ * POST /api/cleo/task
+ * Creates a new task under a parent epic/task.
+ */
+export interface CreateTaskBody {
+  title:string;
+  description?:string;
+  parent_id?:string;
+  priority?:string;
+  type?:string;
+  size?:string;
+  acceptance?:string[];
+}
+
+export function createTask(body:CreateTaskBody):{ok:boolean;task?:TaskDetail;error?:string} {
+  if(!body.title?.trim()) return {ok:false,error:"title is required"};
+  // Generate next ID: T{max+1}
+  const maxRow=queryOne<{max_n:number|null}>(`SELECT MAX(CAST(SUBSTR(id,2) AS INT)) AS max_n FROM tasks WHERE id LIKE 'T%'`,[]);
+  const nextN=(maxRow?.max_n??0)+1;
+  const id=`T${nextN}`;
+  const now=new Date().toISOString();
+  const priority=body.priority??"medium";
+  const type=body.type??"task";
+  const size=body.size??null;
+  const acceptance=body.acceptance??[];
+  const ok=execWrite(
+    `INSERT INTO tasks (id,title,description,parent_id,priority,type,size,status,acceptance_json,notes_json,labels_json,files_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?,?)`,
+    [id,body.title.trim(),body.description??null,body.parent_id??null,priority,type,size,JSON.stringify(acceptance),JSON.stringify([]),JSON.stringify([]),JSON.stringify([]),now,now]
+  );
+  if(!ok) return {ok:false,error:"insert failed"};
+  const task=getTaskById(id);
+  return task?{ok:true,task}:{ok:false,error:"created but fetch failed"};
+}
+
+/**
+ * POST /api/cleo/task/:id/queue
+ * Sets task to pending and appends a queue note. Optionally triggers
+ * re-dispatch if the task is mapped to a GitHub issue.
+ */
+export async function queueTask(id:string):{ok:boolean;queued:boolean;dispatched:boolean;error?:string} {
+  const row=queryOne<{notes_json:string|null;description:string|null}>(`SELECT notes_json,description FROM tasks WHERE id=?`,[id]);
+  if(!row) return {ok:false,queued:false,dispatched:false,error:"task not found"};
+  // Set status to pending
+  const statusOk=execWrite(`UPDATE tasks SET status='pending', updated_at=? WHERE id=?`,[new Date().toISOString(),id]);
+  if(!statusOk) return {ok:false,queued:false,dispatched:false,error:"write failed"};
+  // Append note
+  const notes=parseJson<string[]>(row.notes_json,[]);
+  notes.push(`${nowUtc()}: Queued for dispatch by operator`);
+  execWrite(`UPDATE tasks SET notes_json=? WHERE id=?`,[JSON.stringify(notes),id]);
+  // Check for GitHub issue link
+  const allText=[row.description,...notes].filter(Boolean) as string[];
+  const issueNumMatch=allText.join(" ").match(/\bissue[_ #]*#?(\d+)\b/i)||allText.join(" ").match(/#(\d+)\b/);
+  let dispatched=false;
+  if(issueNumMatch) {
+    try {
+      const resp=await fetch("http://10.0.10.22:8088/webhook/github",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"reopened",issue:{number:Number(issueNumMatch[1])}}),signal:AbortSignal.timeout(3000)});
+      dispatched=resp.ok;
+    } catch { dispatched=false; }
+  }
+  return {ok:true,queued:true,dispatched};
 }
 
 export function getTaskById(id:string):TaskDetail|null {

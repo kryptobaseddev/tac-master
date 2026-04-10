@@ -165,6 +165,59 @@
                 </div>
               </section>
             </div>
+
+            <!-- Action bar -->
+            <div class="tdm-action-bar">
+              <!-- Add Note -->
+              <button class="tdm-action-btn tdm-action-note" @click="showNoteInput = !showNoteInput" :disabled="actionBusy">
+                + Add Note
+              </button>
+
+              <!-- Change Status -->
+              <select class="tdm-action-btn tdm-action-status" v-model="newStatus" @change="updateStatus" :disabled="actionBusy">
+                <option value="">Change Status...</option>
+                <option value="pending">Pending</option>
+                <option value="active">Active</option>
+                <option value="done">Done</option>
+                <option value="blocked">Blocked</option>
+              </select>
+
+              <!-- Queue for Dispatch -->
+              <button
+                v-if="store.activeModal.status === 'pending' || store.activeModal.status === 'blocked'"
+                class="tdm-action-btn tdm-action-queue"
+                @click="queueTask"
+                :disabled="actionBusy"
+              >
+                &#9654; Queue
+              </button>
+            </div>
+
+            <!-- Note input (shown when Add Note clicked) -->
+            <div v-if="showNoteInput" class="tdm-note-compose">
+              <textarea
+                class="tdm-note-textarea"
+                v-model="noteText"
+                placeholder="Type your note..."
+                rows="3"
+                :disabled="actionBusy"
+              ></textarea>
+              <div class="tdm-note-compose-actions">
+                <button class="tdm-action-btn tdm-action-submit" @click="submitNote" :disabled="actionBusy || !noteText.trim()">
+                  Submit
+                </button>
+                <button class="tdm-action-btn tdm-action-cancel" @click="showNoteInput = false; noteText = ''" :disabled="actionBusy">
+                  Cancel
+                </button>
+              </div>
+            </div>
+
+            <!-- Toast notification -->
+            <Transition name="tdm-toast-slide">
+              <div v-if="toastMsg" class="tdm-toast" :class="toastErr ? 'tdm-toast-err' : 'tdm-toast-ok'">
+                {{ toastMsg }}
+              </div>
+            </Transition>
           </div>
         </Transition>
       </div>
@@ -178,6 +231,103 @@ import { useCleoStore } from "../../stores/cleoStore";
 
 const store = useCleoStore();
 const backdropRef = ref<HTMLElement | null>(null);
+
+// Action bar state
+const showNoteInput = ref(false);
+const noteText = ref("");
+const newStatus = ref("");
+const actionBusy = ref(false);
+const toastMsg = ref("");
+const toastErr = ref(false);
+let _toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showToast(msg: string, err = false): void {
+  toastMsg.value = msg;
+  toastErr.value = err;
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toastMsg.value = ""; }, 3000);
+}
+
+watch(() => store.activeModal, () => {
+  showNoteInput.value = false;
+  noteText.value = "";
+  newStatus.value = "";
+  actionBusy.value = false;
+});
+
+async function submitNote(): Promise<void> {
+  if (!store.activeModal || !noteText.value.trim()) return;
+  actionBusy.value = true;
+  try {
+    const resp = await fetch(`/api/cleo/task/${encodeURIComponent(store.activeModal.id)}/note`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: noteText.value.trim() }),
+    });
+    const data = (await resp.json()) as { ok: boolean; error?: string };
+    if (data.ok) {
+      showToast("Note added.");
+      noteText.value = "";
+      showNoteInput.value = false;
+      await store.openTaskModal(store.activeModal.id);
+    } else {
+      showToast(data.error ?? "Failed to add note.", true);
+    }
+  } catch (e: unknown) {
+    showToast(e instanceof Error ? e.message : "Network error.", true);
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
+async function updateStatus(): Promise<void> {
+  if (!store.activeModal || !newStatus.value) return;
+  actionBusy.value = true;
+  const status = newStatus.value;
+  newStatus.value = "";
+  try {
+    const resp = await fetch(`/api/cleo/task/${encodeURIComponent(store.activeModal.id)}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    const data = (await resp.json()) as { ok: boolean; error?: string };
+    if (data.ok) {
+      showToast(`Status updated to ${status}.`);
+      await store.openTaskModal(store.activeModal.id);
+      await store.fetchEpics();
+    } else {
+      showToast(data.error ?? "Failed to update status.", true);
+    }
+  } catch (e: unknown) {
+    showToast(e instanceof Error ? e.message : "Network error.", true);
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
+async function queueTask(): Promise<void> {
+  if (!store.activeModal) return;
+  actionBusy.value = true;
+  try {
+    const resp = await fetch(`/api/cleo/task/${encodeURIComponent(store.activeModal.id)}/queue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = (await resp.json()) as { ok: boolean; queued: boolean; dispatched: boolean; error?: string };
+    if (data.ok) {
+      showToast(data.dispatched ? "Queued and dispatched." : "Queued for dispatch.");
+      await store.openTaskModal(store.activeModal.id);
+      await store.fetchEpics();
+    } else {
+      showToast(data.error ?? "Failed to queue task.", true);
+    }
+  } catch (e: unknown) {
+    showToast(e instanceof Error ? e.message : "Network error.", true);
+  } finally {
+    actionBusy.value = false;
+  }
+}
 
 // Focus backdrop so Escape key works
 watch(
@@ -682,4 +832,97 @@ function navigateToTask(taskId: string | null | undefined): void {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.3; }
 }
+
+/* Action bar */
+.tdm-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-top: 1px solid #21262d;
+  flex-shrink: 0;
+  background: #0d1117;
+}
+
+.tdm-action-btn {
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 11px;
+  background: #1a1a1a;
+  color: #8b949e;
+  border: 1px solid #30363d;
+  border-radius: 20px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.tdm-action-btn:hover:not(:disabled) { border-color: #39d0d8; color: #39d0d8; }
+.tdm-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.tdm-action-note:hover:not(:disabled)  { border-color: #58a6ff; color: #58a6ff; }
+.tdm-action-queue:hover:not(:disabled) { border-color: #3fb950; color: #3fb950; }
+.tdm-action-submit:hover:not(:disabled) { background: #0d2910; border-color: #3fb950; color: #3fb950; }
+.tdm-action-cancel:hover:not(:disabled) { border-color: #484f58; color: #484f58; }
+
+.tdm-action-status {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 12px;
+  cursor: pointer;
+}
+
+/* Note compose area */
+.tdm-note-compose {
+  padding: 8px 16px 10px;
+  border-top: 1px solid #161b22;
+  background: #0d1117;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tdm-note-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #161b22;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 8px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 11px;
+  resize: vertical;
+  min-height: 56px;
+  transition: border-color 0.15s;
+}
+.tdm-note-textarea:focus { outline: none; border-color: #39d0d8; }
+.tdm-note-textarea:disabled { opacity: 0.5; }
+
+.tdm-note-compose-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* Toast */
+.tdm-toast {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2000;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 11px;
+  padding: 8px 14px;
+  border-radius: 4px;
+  border: 1px solid;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  pointer-events: none;
+}
+.tdm-toast-ok  { background: #0a1a10; border-color: #3fb950; color: #3fb950; }
+.tdm-toast-err { background: #2d1515; border-color: #f78166; color: #f78166; }
+
+.tdm-toast-slide-enter-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.tdm-toast-slide-leave-active { transition: opacity 0.3s ease, transform 0.3s ease; }
+.tdm-toast-slide-enter-from  { opacity: 0; transform: translateY(-8px); }
+.tdm-toast-slide-leave-to    { opacity: 0; transform: translateY(-4px); }
 </style>

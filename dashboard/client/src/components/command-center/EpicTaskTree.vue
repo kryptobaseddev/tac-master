@@ -47,6 +47,12 @@
               title="View epic details"
               @click.stop="store.openTaskModal(epic.id)"
             >&#9432;</span>
+            <!-- Add child task button -->
+            <span
+              class="ett-add-btn"
+              title="Add child task"
+              @click.stop="openCreateForm(epic.id)"
+            >+</span>
           </div>
           <!-- Progress bar -->
           <div class="ett-progress-row">
@@ -99,6 +105,40 @@
               <span class="ett-subtask-label">{{ task.children_done }}/{{ task.children_count }}</span>
             </span>
             <span v-if="task.size" class="ett-size-badge">{{ task.size }}</span>
+            <span class="ett-priority-dot" :class="`ett-pdot-${task.priority}`" :title="task.priority"></span>
+          </div>
+
+          <!-- Inline create form -->
+          <div v-if="createFormEpicId === epic.id" class="ett-create-form" @click.stop>
+            <div class="ett-create-form-title">New task under {{ epic.id }}</div>
+            <input
+              class="ett-create-input"
+              v-model="createTitle"
+              placeholder="Task title (required)"
+              :disabled="createBusy"
+              @keydown.enter="submitCreate"
+              @keydown.escape="closeCreateForm"
+            />
+            <div class="ett-create-row">
+              <select class="ett-create-select" v-model="createPriority" :disabled="createBusy">
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+              <select class="ett-create-select" v-model="createSize" :disabled="createBusy">
+                <option value="small">Small</option>
+                <option value="medium">Medium</option>
+                <option value="large">Large</option>
+              </select>
+              <button class="ett-create-btn ett-create-submit" @click="submitCreate" :disabled="createBusy || !createTitle.trim()">
+                {{ createBusy ? '...' : 'Add' }}
+              </button>
+              <button class="ett-create-btn ett-create-cancel" @click="closeCreateForm" :disabled="createBusy">
+                Cancel
+              </button>
+            </div>
+            <div v-if="createError" class="ett-create-error">{{ createError }}</div>
           </div>
         </div>
       </div>
@@ -117,9 +157,70 @@ import TaskDetailModal from "./TaskDetailModal.vue";
 const store = useCleoStore();
 const expandedEpics = ref<Set<string>>(new Set());
 
+// Create form state
+const createFormEpicId = ref<string | null>(null);
+const createTitle = ref("");
+const createPriority = ref("medium");
+const createSize = ref("medium");
+const createBusy = ref(false);
+const createError = ref("");
+
+function openCreateForm(epicId: string): void {
+  createFormEpicId.value = epicId;
+  createTitle.value = "";
+  createPriority.value = "medium";
+  createSize.value = "medium";
+  createError.value = "";
+  // Expand the epic so form is visible
+  if (!expandedEpics.value.has(epicId)) {
+    expandedEpics.value.add(epicId);
+    store.selectEpic(epicId);
+    expandedEpics.value = new Set(expandedEpics.value);
+  }
+}
+
+function closeCreateForm(): void {
+  createFormEpicId.value = null;
+  createError.value = "";
+}
+
+async function submitCreate(): Promise<void> {
+  if (!createFormEpicId.value || !createTitle.value.trim()) return;
+  createBusy.value = true;
+  createError.value = "";
+  try {
+    const resp = await fetch("/api/cleo/task", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: createTitle.value.trim(),
+        parent_id: createFormEpicId.value,
+        priority: createPriority.value,
+        size: createSize.value,
+        type: "task",
+      }),
+    });
+    const data = (await resp.json()) as { ok: boolean; task?: { id: string }; error?: string };
+    if (data.ok) {
+      const parentId = createFormEpicId.value;
+      closeCreateForm();
+      // Refresh the epic's task list
+      await store.fetchTasks(parentId);
+      await store.fetchEpics();
+    } else {
+      createError.value = data.error ?? "Failed to create task.";
+    }
+  } catch (e: unknown) {
+    createError.value = e instanceof Error ? e.message : "Network error.";
+  } finally {
+    createBusy.value = false;
+  }
+}
+
 function toggleEpic(id: string): void {
   if (expandedEpics.value.has(id)) {
     expandedEpics.value.delete(id);
+    if (createFormEpicId.value === id) closeCreateForm();
   } else {
     expandedEpics.value.add(id);
     store.selectEpic(id);
@@ -426,6 +527,17 @@ onUnmounted(() => { store.stopPolling(); });
   text-transform: uppercase;
 }
 
+.ett-priority-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.ett-pdot-critical { background: #f78166; }
+.ett-pdot-high     { background: #ffa657; }
+.ett-pdot-medium   { background: #d29922; }
+.ett-pdot-low      { background: #484f58; }
+
 /* Info button on epic header */
 .ett-info-btn {
   flex-shrink: 0;
@@ -438,6 +550,93 @@ onUnmounted(() => { store.stopPolling(); });
   transition: color 0.15s;
 }
 .ett-info-btn:hover { color: #58a6ff; }
+
+/* Add child task button (+) on epic row */
+.ett-add-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid #30363d;
+  color: #484f58;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s, background 0.15s;
+}
+.ett-epic-header:hover .ett-add-btn { opacity: 1; }
+.ett-add-btn:hover { color: #39d0d8; border-color: #39d0d8; background: #051a1a; }
+
+/* Inline create form */
+.ett-create-form {
+  padding: 8px 12px 10px;
+  border-top: 1px solid #161b22;
+  background: #0d1117;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ett-create-form-title {
+  font-size: 10px;
+  color: #484f58;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.ett-create-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #161b22;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 11px;
+  transition: border-color 0.15s;
+}
+.ett-create-input:focus { outline: none; border-color: #39d0d8; }
+.ett-create-input:disabled { opacity: 0.5; }
+.ett-create-row {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.ett-create-select {
+  background: #161b22;
+  color: #8b949e;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 10px;
+  cursor: pointer;
+}
+.ett-create-select:disabled { opacity: 0.5; }
+.ett-create-btn {
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 10px;
+  background: #1a1a1a;
+  color: #8b949e;
+  border: 1px solid #30363d;
+  border-radius: 20px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.ett-create-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ett-create-submit:hover:not(:disabled) { border-color: #3fb950; color: #3fb950; }
+.ett-create-cancel:hover:not(:disabled) { border-color: #484f58; color: #484f58; }
+.ett-create-error {
+  font-size: 10px;
+  color: #f78166;
+  padding: 2px 0;
+}
 
 /* Subtask progress bar inline in task rows */
 .ett-subtask-progress {

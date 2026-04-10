@@ -277,6 +277,25 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   const runningAgents = computed(() =>
     agents.value.filter((a) => a.status === "executing"),
   );
+
+  /**
+   * All agents sorted by recency (running first, then by started_at desc).
+   * Used by ActiveAgentsPanel so the panel is never empty — shows recent
+   * agents even when nothing is currently running.
+   */
+  const recentAgents = computed<Agent[]>(() => {
+    return [...agents.value].sort((a, b) => {
+      // Running first
+      const aRunning = a.status === "executing" ? 1 : 0;
+      const bRunning = b.status === "executing" ? 1 : 0;
+      if (bRunning !== aRunning) return bRunning - aRunning;
+      // Then by started_at unix desc
+      const aTs = (a.metadata?.started_at_unix as number | undefined) ?? 0;
+      const bTs = (b.metadata?.started_at_unix as number | undefined) ?? 0;
+      return bTs - aTs;
+    });
+  });
+
   const selectedAgent = computed(() =>
     agents.value.find((a) => a.id === selectedAgentId.value) ?? null,
   );
@@ -359,13 +378,18 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   async function loadInitial() {
     try {
       const [runsResp, reposResp, eventsResp] = await Promise.all([
-        fetch("/api/runs").then((r) => r.json()),
+        fetch("/api/runs?limit=50&sort=started_at:desc").then((r) => r.json()),
         fetch("/api/repos").then((r) => r.json()),
         fetch("/events/recent?limit=200").then((r) => r.json()),
       ]);
       agents.value = (runsResp.runs || []).map(runToAgent);
       repos.value = reposResp.repos || [];
       hydrateFromInitial(eventsResp || []);
+
+      // Auto-select the most recent run so panels are never empty on mount.
+      if (!selectedAgentId.value && recentAgents.value.length > 0) {
+        selectedAgentId.value = recentAgents.value[0].id;
+      }
     } catch (e) {
       console.error("[store] initial load failed:", e);
     }
@@ -433,6 +457,7 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     // getters
     activeAgents,
     runningAgents,
+    recentAgents,
     selectedAgent,
     filteredEventStream,
     stats,
