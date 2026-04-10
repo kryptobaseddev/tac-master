@@ -439,15 +439,18 @@ export function getAdwsWithEvents(limit = 50): AdwSummaryResult[] {
       succeeded: "completed",
       failed: "failed",
       aborted: "failed",
+      incomplete: "failed",   // incomplete = run was cut short (e.g. budget exceeded)
     };
     const mappedStatus = statusMap[run.status] ?? run.status;
 
     // Compute duration_seconds
     let durationSeconds: number | null = null;
     if (run.started_at != null && run.ended_at != null) {
-      // Timestamps may be unix seconds or milliseconds (> 1e9 = seconds)
-      const startMs = Number(run.started_at) > 1e9 ? Number(run.started_at) : Number(run.started_at) * 1000;
-      const endMs = Number(run.ended_at) > 1e9 ? Number(run.ended_at) : Number(run.ended_at) * 1000;
+      // tac_master.sqlite stores timestamps as Unix seconds (13-digit ms would be > 1e12).
+      // Convert to milliseconds: if value < 1e12 it's Unix seconds, else already ms.
+      const toMs = (v: number) => v < 1e12 ? v * 1000 : v;
+      const startMs = toMs(Number(run.started_at));
+      const endMs   = toMs(Number(run.ended_at));
       if (endMs > startMs) {
         durationSeconds = Math.round((endMs - startMs) / 1000);
       }
