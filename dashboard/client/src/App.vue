@@ -17,6 +17,7 @@ import StatusBar from "./components/StatusBar.vue";
 // Main panels (center column)
 import ActiveAgentsPanel from "./components/ActiveAgentsPanel.vue";
 import PipelineFlow from "./components/PipelineFlow.vue";
+import CostDashboard from "./components/CostDashboard.vue";
 import IssueDetails from "./components/IssueDetails.vue";
 import DependencyGraph from "./components/DependencyGraph.vue";
 
@@ -168,6 +169,7 @@ onMounted(() => {
       <!-- Dashboard view: panels -->
       <template v-if="activeTab === 'dashboard'">
         <PipelineFlow @phase-click="openPhaseModal" />
+        <CostDashboard />
         <ActiveAgentsPanel />
         <div class="dep-graph-panel">
           <DependencyGraph />
