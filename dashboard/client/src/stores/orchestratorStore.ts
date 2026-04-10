@@ -617,6 +617,110 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     lastHeartbeat.value = timestamp;
   }
 
+  /**
+   * Handle WebSocket ADW event: convert incoming hook/thinking/tool/text events
+   * with an adw_id into AdwEvent format and append to allAdwEventsByStep.
+   *
+   * When a WS event arrives with adw_id:
+   * - If the ADW is not yet in store.adws, trigger a fetchAdws() refresh
+   * - Convert the event to AdwEvent format
+   * - Append it to allAdwEventsByStep[adw_id][phase or "_workflow"]
+   *
+   * This ensures swimlanes fill with colored squares in real-time.
+   */
+  function handleAdwWsEvent(event: any) {
+    const adwId = event.adw_id || event.data?.adw_id;
+    if (!adwId) return; // Not an ADW event
+
+    // Ensure the ADW exists in state; if not, refresh
+    const adwExists = adws.value.some((a) => a.id === adwId);
+    if (!adwExists) {
+      // Trigger async refresh, don't block on it
+      fetchAdws().catch((err) => {
+        console.warn("[store] fetchAdws on new adw_id failed:", err);
+      });
+    }
+
+    // Convert the incoming event to AdwEvent format
+    const adwEvent = convertWsEventToAdwEvent(event);
+    if (!adwEvent) return;
+
+    // Ensure the adw_id key exists in allAdwEventsByStep
+    if (!allAdwEventsByStep.value[adwId]) {
+      allAdwEventsByStep.value[adwId] = {};
+    }
+
+    // Determine the step (phase or fallback to "_workflow")
+    const step = adwEvent.adw_step || "_workflow";
+
+    // Ensure the step array exists
+    if (!allAdwEventsByStep.value[adwId][step]) {
+      allAdwEventsByStep.value[adwId][step] = [];
+    }
+
+    // Append the event (dedup by id to avoid duplicates on reconnect)
+    const existingIds = new Set(
+      allAdwEventsByStep.value[adwId][step].map((e) => e.id)
+    );
+    if (!existingIds.has(adwEvent.id)) {
+      allAdwEventsByStep.value[adwId][step].push(adwEvent);
+    }
+  }
+
+  /**
+   * Convert an incoming WS event (thinking, tool_use, text, agent_status, or hook)
+   * into AdwEvent format for swimlane display.
+   */
+  function convertWsEventToAdwEvent(event: any): AdwEvent | null {
+    const adwId = event.adw_id || event.data?.adw_id;
+    const phase = event.phase || event.data?.phase;
+    const timestamp = event.timestamp || event.data?.timestamp;
+
+    if (!adwId || !timestamp) return null;
+
+    // Generate a unique event ID if not provided
+    const eventId = event.id || event.data?.id || `${adwId}-${Date.now()}-${Math.random()}`;
+
+    // Determine event_type and event_category based on WS message type
+    let eventType = event.type;
+    let eventCategory = "system";
+    let summary: string | null = null;
+
+    if (event.type === "thinking_block" || event.type === "thinking") {
+      eventType = "ThinkingBlock";
+      eventCategory = "thinking";
+      summary = (event.data?.thinking || "").slice(0, 100);
+    } else if (event.type === "tool_use_block" || event.type === "tool_use") {
+      eventType = "ToolUseBlock";
+      eventCategory = "tool";
+      summary = event.data?.tool_name || "Tool Use";
+    } else if (event.type === "text_block" || event.type === "text") {
+      eventType = "TextBlock";
+      eventCategory = "response";
+      summary = (event.data?.text || "").slice(0, 100);
+    } else if (event.type === "agent_status") {
+      eventType = event.data?.hook_event_type || "AgentStatus";
+      eventCategory = "hook";
+      summary = `Hook: ${eventType}`;
+    } else if (event.type === "event" || event.hook_event_type) {
+      // Legacy HookEvent format
+      eventType = event.hook_event_type || event.type;
+      eventCategory = hookEventTypeToCategory(eventType);
+      summary = summariseHookPayload(event);
+    }
+
+    return {
+      id: eventId,
+      adw_id: adwId,
+      adw_step: phase ?? null,
+      event_category: eventCategory,
+      event_type: eventType,
+      summary,
+      payload: event.payload || event.data || null,
+      timestamp: new Date(typeof timestamp === "number" ? timestamp : parseInt(timestamp)).toISOString(),
+    };
+  }
+
   // --- HTTP bootstrap ---
 
   async function loadInitial() {
@@ -715,9 +819,26 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     };
   }
 
+  /**
+   * Start periodic ADW refresh every 30 seconds as a fallback.
+   * Helps ensure swimlanes stay current even if some WS events are missed.
+   */
+  function startPeriodicAdwRefresh(intervalMs: number = 30000): () => void {
+    const intervalId = setInterval(() => {
+      fetchAdws().catch((err) => {
+        console.warn("[store] periodic fetchAdws failed:", err);
+      });
+    }, intervalMs);
+
+    // Return a cleanup function
+    return () => clearInterval(intervalId);
+  }
+
   async function initialize() {
     await loadInitial();
     connectWebSocket();
+    // Start periodic ADW refresh as a fallback (30s interval)
+    startPeriodicAdwRefresh(30000);
   }
 
   return {
@@ -836,5 +957,11 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     addAgentStatus,
     /** Update the last heartbeat timestamp */
     updateHeartbeat,
+
+    // --- ADW REAL-TIME UPDATES (T134) ---
+    /** Handle WebSocket ADW events and update swimlanes in real-time */
+    handleAdwWsEvent,
+    /** Start periodic ADW refresh fallback */
+    startPeriodicAdwRefresh,
   };
 });

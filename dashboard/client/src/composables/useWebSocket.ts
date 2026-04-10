@@ -56,8 +56,11 @@ export function useWebSocket() {
         break;
 
       case "event":
-        // Legacy hook event
+        // Legacy hook event — also route to swimlanes if it has adw_id (T134)
         store.addHookEvent(msg.data);
+        if (msg.data.adw_id && typeof (store as any).handleAdwWsEvent === "function") {
+          (store as any).handleAdwWsEvent(msg.data);
+        }
         break;
 
       case "run_update":
@@ -69,75 +72,46 @@ export function useWebSocket() {
         break;
 
       case "thinking_block":
-        // TODO (T102): implement store.addThinkingBlock(msg.data)
-        // For now fall through to addHookEvent-compatible synthetic event
+        // T134: Route to handleAdwWsEvent for swimlane real-time updates
+        if (typeof (store as any).handleAdwWsEvent === "function") {
+          (store as any).handleAdwWsEvent(msg);
+        }
+        // Also call addThinkingBlock if it exists (for streaming blocks panel)
         if (typeof (store as any).addThinkingBlock === "function") {
           (store as any).addThinkingBlock(msg.data);
-        } else {
-          // Synthetic fallback: surface as a hook event so the UI shows it
-          store.addHookEvent({
-            source_app: "tac-master",
-            session_id: msg.data.session_id,
-            hook_event_type: "ThinkingBlock",
-            adw_id: msg.data.adw_id,
-            phase: msg.data.phase,
-            payload: { thinking: msg.data.thinking },
-            timestamp: msg.data.timestamp,
-          });
         }
         break;
 
       case "tool_use_block":
-        // TODO (T102): implement store.addToolUseBlock(msg.data)
+        // T134: Route to handleAdwWsEvent for swimlane real-time updates
+        if (typeof (store as any).handleAdwWsEvent === "function") {
+          (store as any).handleAdwWsEvent(msg);
+        }
+        // Also call addToolUseBlock if it exists (for streaming blocks panel)
         if (typeof (store as any).addToolUseBlock === "function") {
           (store as any).addToolUseBlock(msg.data);
-        } else {
-          store.addHookEvent({
-            source_app: "tac-master",
-            session_id: msg.data.session_id,
-            hook_event_type: "ToolUseBlock",
-            adw_id: msg.data.adw_id,
-            phase: msg.data.phase,
-            payload: {
-              tool_name: msg.data.tool_name,
-              tool_input: msg.data.tool_input,
-            },
-            timestamp: msg.data.timestamp,
-          });
         }
         break;
 
       case "text_block":
-        // TODO (T102): implement store.addTextBlock(msg.data)
+        // T134: Route to handleAdwWsEvent for swimlane real-time updates
+        if (typeof (store as any).handleAdwWsEvent === "function") {
+          (store as any).handleAdwWsEvent(msg);
+        }
+        // Also call addTextBlock if it exists (for streaming blocks panel)
         if (typeof (store as any).addTextBlock === "function") {
           (store as any).addTextBlock(msg.data);
-        } else {
-          store.addHookEvent({
-            source_app: "tac-master",
-            session_id: msg.data.session_id,
-            hook_event_type: "TextBlock",
-            adw_id: msg.data.adw_id,
-            phase: msg.data.phase,
-            payload: { text: msg.data.text },
-            timestamp: msg.data.timestamp,
-          });
         }
         break;
 
       case "agent_status":
-        // TODO (T102): implement store.addAgentStatus(msg.data)
+        // T134: Route to handleAdwWsEvent for swimlane real-time updates
+        if (typeof (store as any).handleAdwWsEvent === "function") {
+          (store as any).handleAdwWsEvent(msg);
+        }
+        // Also call addAgentStatus if it exists (for status tracking)
         if (typeof (store as any).addAgentStatus === "function") {
           (store as any).addAgentStatus(msg.data);
-        } else {
-          store.addHookEvent({
-            source_app: "tac-master",
-            session_id: msg.data.session_id,
-            hook_event_type: msg.data.hook_event_type,
-            adw_id: msg.data.adw_id,
-            phase: msg.data.phase,
-            payload: { hook_event_type: msg.data.hook_event_type },
-            timestamp: msg.data.timestamp,
-          });
         }
         break;
 
