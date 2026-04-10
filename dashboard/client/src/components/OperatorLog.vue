@@ -42,20 +42,6 @@
         </div>
       </div>
 
-      <!-- Inline command input -->
-      <div class="oplog__input-row">
-        <input
-          class="oplog__input"
-          v-model="cmdText"
-          placeholder="Quick command..."
-          @keydown.enter="sendCommand"
-          :disabled="cmdBusy"
-          maxlength="200"
-        />
-        <button class="oplog__send" @click="sendCommand" :disabled="cmdBusy || !cmdText.trim()">
-          &#9658;
-        </button>
-      </div>
     </div>
   </div>
 </template>
@@ -79,10 +65,8 @@ interface LogEntry {
 const cleoStore = useCleoStore();
 
 const entries = ref<LogEntry[]>([]);
-const collapsed = ref(false);
+const collapsed = ref(true);
 const feedEl = ref<HTMLElement | null>(null);
-const cmdText = ref("");
-const cmdBusy = ref(false);
 
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -126,25 +110,6 @@ function openTask(taskId: string | null): void {
   cleoStore.openTaskModal(taskId);
 }
 
-async function sendCommand(): Promise<void> {
-  const text = cmdText.value.trim();
-  if (!text || cmdBusy.value) return;
-  cmdBusy.value = true;
-  cmdText.value = "";
-  try {
-    await fetch("/api/command", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "freetext", text }),
-    });
-    // Immediately refresh log
-    await fetchLog();
-  } catch {
-    // ignore
-  } finally {
-    cmdBusy.value = false;
-  }
-}
 
 watch(collapsed, async (val) => {
   if (!val) {
@@ -315,42 +280,4 @@ onUnmounted(() => {
 }
 .oplog__ghlink:hover { color: #56d364; }
 
-.oplog__input-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border-top: 1px solid #1a2030;
-  flex-shrink: 0;
-}
-
-.oplog__input {
-  flex: 1;
-  background: #0d1117;
-  color: #c9d1d9;
-  border: 1px solid #21262d;
-  border-radius: 3px;
-  padding: 3px 7px;
-  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
-  font-size: 10px;
-  outline: none;
-  transition: border-color 0.15s;
-}
-.oplog__input:focus { border-color: #39d0d8; }
-.oplog__input:disabled { opacity: 0.5; }
-.oplog__input::placeholder { color: #30363d; }
-
-.oplog__send {
-  flex-shrink: 0;
-  background: none;
-  border: 1px solid #21262d;
-  border-radius: 3px;
-  color: #484f58;
-  font-size: 10px;
-  padding: 3px 6px;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-.oplog__send:hover:not(:disabled) { border-color: #39d0d8; color: #39d0d8; }
-.oplog__send:disabled { opacity: 0.45; cursor: not-allowed; }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import { useOrchestratorStore } from "./stores/orchestratorStore";
 import { useChatStore } from "./stores/chatStore";
 // T071 / T092: WebSocket composable — connects on mount, routes all WsMessage
@@ -58,6 +58,9 @@ import ConfigPage from "./components/ConfigPage.vue";
 const store = useOrchestratorStore();
 const chatStore = useChatStore();
 
+// ── Computed: active (running) ADW agents ─────────────────────────
+const runningAgents = computed(() => store.runningAgents);
+
 // ── WebSocket (T071/T092) ─────────────────────────────────────────
 // useWebSocket connects on mount, routes all WsMessage types to the store,
 // and automatically reconnects with exponential backoff. The composable
@@ -86,8 +89,23 @@ type Tab = "dashboard" | "agents" | "repos" | "config" | "logs";
 const activeTab = ref<Tab>("dashboard");
 
 // ── Right panel tabs (T104) ────────────────────────────────────
+// Default to CHAT when no runs are live; auto-switch to execution when runs start.
 type RightPanelTab = "execution" | "chat";
-const rightPanelTab = ref<RightPanelTab>("execution");
+const rightPanelTab = ref<RightPanelTab>("chat");
+
+// Auto-switch right panel: chat→execution when a run starts, execution→chat when idle
+watch(
+  () => store.stats.running,
+  (count, prev) => {
+    if (count > 0 && (prev ?? 0) === 0) {
+      // Run just started — show execution
+      rightPanelTab.value = "execution";
+    } else if (count === 0 && (prev ?? 0) > 0) {
+      // Run just ended — go back to chat
+      rightPanelTab.value = "chat";
+    }
+  }
+);
 
 // ── Repo selection ────────────────────────────────────────────────
 // currentRepoUrl: user-selected repo (shown in HeaderBar dropdown)
@@ -199,6 +217,45 @@ onMounted(() => {
 
         <!-- Dashboard panels (default view) -->
         <div v-if="store.viewMode === 'dashboard'" class="dashboard-panels">
+          <!-- Orchestrator + active agent summary row -->
+          <div class="agent-summary-row">
+            <!-- Orchestrator card -->
+            <div
+              class="orch-card"
+              :class="{ 'orch-card--busy': store.stats.running > 0 }"
+              @click="activeTab = 'agents'"
+              title="View all agents"
+            >
+              <div class="orch-card__icon">&#129504;</div>
+              <div class="orch-card__body">
+                <div class="orch-card__title">TAC-MASTER</div>
+                <div class="orch-card__status">
+                  <span class="orch-card__dot" :class="store.stats.running > 0 ? 'dot--busy' : 'dot--idle'"></span>
+                  {{ store.stats.running > 0 ? `${store.stats.running} run${store.stats.running > 1 ? 's' : ''} active` : 'Idle' }}
+                </div>
+              </div>
+              <div class="orch-card__cost">${{ store.stats.cost.toFixed(2) }}</div>
+            </div>
+
+            <!-- Active agent mini-cards -->
+            <div
+              v-for="agent in runningAgents.slice(0, 4)"
+              :key="agent.id"
+              class="agent-mini-card"
+              @click="activeTab = 'agents'"
+              :title="`${agent.name} — click to view`"
+            >
+              <div class="agent-mini-card__name">{{ agent.name }}</div>
+              <div class="agent-mini-card__phase">{{ agent.adw_step ?? agent.status }}</div>
+              <div class="agent-mini-card__cost">${{ (agent.total_cost ?? 0).toFixed(3) }}</div>
+            </div>
+
+            <!-- Overflow badge -->
+            <div v-if="runningAgents.length > 4" class="agent-overflow-badge">
+              +{{ runningAgents.length - 4 }} more
+            </div>
+          </div>
+
           <PipelineFlow @phase-click="openPhaseModal" />
           <CostDashboard />
           <ActiveAgentsPanel />
@@ -455,5 +512,171 @@ html, body, #app {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* ── Agent summary row (orchestrator card + active agent mini cards) ── */
+.agent-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
+  overflow-x: auto;
+  min-height: 56px;
+}
+
+/* Orchestrator card */
+.orch-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(0, 255, 204, 0.06);
+  border: 1px solid rgba(0, 255, 204, 0.2);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  min-width: 160px;
+}
+
+.orch-card:hover {
+  background: rgba(0, 255, 204, 0.12);
+  border-color: rgba(0, 255, 204, 0.4);
+}
+
+.orch-card--busy {
+  border-color: rgba(0, 255, 204, 0.5);
+  background: rgba(0, 255, 204, 0.1);
+  animation: orch-pulse 2s ease-in-out infinite;
+}
+
+@keyframes orch-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 204, 0.15); }
+  50% { box-shadow: 0 0 0 4px rgba(0, 255, 204, 0.05); }
+}
+
+.orch-card__icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.orch-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.orch-card__title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #00ffcc;
+  font-family: ui-monospace, monospace;
+}
+
+.orch-card__status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  margin-top: 2px;
+  font-family: ui-monospace, monospace;
+}
+
+.orch-card__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot--idle {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.dot--busy {
+  background: #00ffcc;
+  animation: dot-blink 1s ease-in-out infinite;
+}
+
+@keyframes dot-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.orch-card__cost {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: ui-monospace, monospace;
+  flex-shrink: 0;
+}
+
+/* Active agent mini cards */
+.agent-mini-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 10px;
+  background: rgba(59, 130, 246, 0.07);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  min-width: 110px;
+  max-width: 160px;
+}
+
+.agent-mini-card:hover {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.agent-mini-card__name {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-mini-card__phase {
+  font-size: 9px;
+  color: rgba(59, 130, 246, 0.9);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.agent-mini-card__cost {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: ui-monospace, monospace;
+}
+
+/* Overflow badge */
+.agent-overflow-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: ui-monospace, monospace;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 </style>
