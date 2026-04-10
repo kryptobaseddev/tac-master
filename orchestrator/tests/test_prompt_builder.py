@@ -7,9 +7,10 @@ system prompt, and that graceful fallbacks work when external dependencies
 
 from __future__ import annotations
 
+import subprocess
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -18,6 +19,7 @@ from orchestrator.prompt_builder import (
     _resolve_available_agents,
     _resolve_available_workflows,
     _resolve_cleo_context,
+    _run_cleo_command,
     build_system_prompt,
 )
 
@@ -149,17 +151,97 @@ class TestResolveAvailableAgents:
 # ---------------------------------------------------------------------------
 
 
-class TestResolveCleoContext:
-    def test_returns_stdout_when_cleo_succeeds(self) -> None:
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "## Dashboard\n- T074 pending\n"
+# ---------------------------------------------------------------------------
+# _run_cleo_command
+# ---------------------------------------------------------------------------
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
+
+class TestRunCleoCommand:
+    def test_returns_stdout_on_success(self) -> None:
+        mock_result = MagicMock(returncode=0, stdout="some output\n")
+        with patch("subprocess.run", return_value=mock_result):
+            result = _run_cleo_command(["dash"])
+        assert result == "some output"
+
+    def test_returns_none_on_nonzero_exit(self) -> None:
+        mock_result = MagicMock(returncode=1, stdout="")
+        with patch("subprocess.run", return_value=mock_result):
+            result = _run_cleo_command(["dash"])
+        assert result is None
+
+    def test_returns_none_when_binary_missing(self) -> None:
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            result = _run_cleo_command(["dash"])
+        assert result is None
+
+    def test_returns_none_on_timeout(self) -> None:
+        with patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="cleo dash", timeout=10),
+        ):
+            result = _run_cleo_command(["dash"])
+        assert result is None
+
+    def test_strips_whitespace(self) -> None:
+        mock_result = MagicMock(returncode=0, stdout="  content  \n")
+        with patch("subprocess.run", return_value=mock_result):
+            result = _run_cleo_command(["current"])
+        assert result == "content"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_cleo_context
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCleoContext:
+    def _make_success(self, text: str) -> MagicMock:
+        return MagicMock(returncode=0, stdout=text + "\n")
+
+    def _make_failure(self) -> MagicMock:
+        return MagicMock(returncode=1, stdout="")
+
+    def test_includes_all_three_sections_when_all_succeed(self) -> None:
+        responses = [
+            self._make_success("## Dashboard\n- T074 pending"),  # cleo dash
+            self._make_success("T111 active"),                    # cleo current
+            self._make_success("T099 blocked: waiting on T098"),  # cleo find blocked
+        ]
+        with patch("subprocess.run", side_effect=responses):
             result = _resolve_cleo_context()
 
-        mock_run.assert_called_once()
+        assert "Project Overview" in result
+        assert "Active Task" in result
+        assert "Blockers" in result
         assert "T074" in result
+        assert "T111" in result
+        assert "T099" in result
+        assert "{{CLEO_CONTEXT}}" not in result
+
+    def test_sections_separated_by_divider(self) -> None:
+        responses = [
+            self._make_success("dash output"),
+            self._make_success("current output"),
+            self._make_success("blocked output"),
+        ]
+        with patch("subprocess.run", side_effect=responses):
+            result = _resolve_cleo_context()
+
+        assert "---" in result
+
+    def test_partial_success_omits_failed_sections(self) -> None:
+        # Only dash succeeds; current and find blocked fail
+        responses = [
+            self._make_success("## Dashboard\n- T074 pending"),
+            self._make_failure(),
+            self._make_failure(),
+        ]
+        with patch("subprocess.run", side_effect=responses):
+            result = _resolve_cleo_context()
+
+        assert "Project Overview" in result
+        assert "Active Task" not in result
+        assert "Blockers" not in result
         assert "{{CLEO_CONTEXT}}" not in result
 
     def test_fallback_when_cleo_not_found(self) -> None:
@@ -167,29 +249,46 @@ class TestResolveCleoContext:
             result = _resolve_cleo_context()
 
         assert "{{CLEO_CONTEXT}}" not in result
-        assert result  # non-empty fallback
+        assert "unavailable" in result.lower()
+
+    def test_fallback_when_all_commands_fail(self) -> None:
+        with patch("subprocess.run", return_value=self._make_failure()):
+            result = _resolve_cleo_context()
+
+        assert "{{CLEO_CONTEXT}}" not in result
+        assert "unavailable" in result.lower()
 
     def test_fallback_when_cleo_times_out(self) -> None:
-        import subprocess
-
         with patch(
-            "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="cleo", timeout=10)
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="cleo", timeout=10),
         ):
             result = _resolve_cleo_context()
 
         assert "{{CLEO_CONTEXT}}" not in result
-        assert result
+        assert result  # non-empty fallback
 
-    def test_fallback_when_cleo_returns_nonzero(self) -> None:
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stdout = ""
+    def test_calls_three_distinct_commands(self) -> None:
+        mock_result = self._make_success("output")
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            _resolve_cleo_context()
 
+        assert mock_run.call_count == 3
+        calls_args = [c.args[0] for c in mock_run.call_args_list]
+        # Each call is ["cleo", <subcommand>, ...]
+        subcommands = [args[1] for args in calls_args]
+        assert "dash" in subcommands
+        assert "current" in subcommands
+        assert "find" in subcommands
+
+    def test_returns_stdout_content_in_result(self) -> None:
+        """Backward-compat: task IDs from cleo output appear in result."""
+        mock_result = MagicMock(returncode=0, stdout="## Dashboard\n- T074 pending\n")
         with patch("subprocess.run", return_value=mock_result):
             result = _resolve_cleo_context()
 
+        assert "T074" in result
         assert "{{CLEO_CONTEXT}}" not in result
-        assert result
 
 
 # ---------------------------------------------------------------------------
