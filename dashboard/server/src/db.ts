@@ -9,6 +9,7 @@
 
 import { Database } from "bun:sqlite";
 import { existsSync, readdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { HookEvent, RepoStatus, RunSummary, FilterOptions } from "./types";
 
 const DASHBOARD_DB = process.env.TAC_DASHBOARD_DB ?? "./dashboard.sqlite";
@@ -54,7 +55,22 @@ export function initDatabase(): void {
       metadata TEXT
     );
   `);
+  eventsDb.exec(`
+    CREATE TABLE IF NOT EXISTS orchestrator_chat (
+      id TEXT PRIMARY KEY,
+      orchestrator_agent_id TEXT NOT NULL,
+      sender_type TEXT NOT NULL CHECK (sender_type IN ('user', 'orchestrator')),
+      receiver_type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      metadata TEXT DEFAULT '{}',
+      summary TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
   eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_oplog_ts ON operator_log(timestamp);")
+  eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_chat_agent ON orchestrator_chat(orchestrator_agent_id);");
+  eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_chat_ts ON orchestrator_chat(created_at);");
   eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_events_repo ON events(repo_url);");
   eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_app);");
   eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);");
@@ -870,4 +886,98 @@ export function getAggregateStats(): AggregateStats {
     console.error("[stats] aggregate query failed:", e);
     return empty;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator chat — persistent message storage for human-LLM conversations
+// ---------------------------------------------------------------------------
+
+export interface ChatMessage {
+  id: string;
+  orchestrator_agent_id: string;
+  sender_type: "user" | "orchestrator";
+  receiver_type: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  summary?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * Insert a chat message into the orchestrator_chat table.
+ * Returns the full inserted row with metadata parsed as an object.
+ */
+export function insertChatMessage(msg: Omit<ChatMessage, "id">): ChatMessage {
+  const id = randomUUID();
+
+  const stmt = db().prepare(`
+    INSERT INTO orchestrator_chat
+      (id, orchestrator_agent_id, sender_type, receiver_type, message, metadata, summary, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const metadataStr = typeof msg.metadata === "string" ? msg.metadata : JSON.stringify(msg.metadata ?? {});
+  const now = msg.created_at ?? Math.floor(Date.now() / 1000);
+
+  stmt.run(
+    id,
+    msg.orchestrator_agent_id,
+    msg.sender_type,
+    msg.receiver_type,
+    msg.message,
+    metadataStr,
+    msg.summary ?? null,
+    now,
+    msg.updated_at ?? now,
+  );
+
+  return {
+    id,
+    orchestrator_agent_id: msg.orchestrator_agent_id,
+    sender_type: msg.sender_type,
+    receiver_type: msg.receiver_type,
+    message: msg.message,
+    metadata: safeParse(metadataStr),
+    summary: msg.summary ?? null,
+    created_at: now,
+    updated_at: msg.updated_at ?? now,
+  };
+}
+
+/**
+ * Retrieve chat history for a specific orchestrator agent.
+ * Returns rows sorted oldest-first, scoped to the orchestrator_agent_id.
+ */
+export function getChatHistory(orchestratorAgentId: string, limit = 50): ChatMessage[] {
+  const rows = db()
+    .prepare(
+      `SELECT * FROM orchestrator_chat
+       WHERE orchestrator_agent_id = ?
+       ORDER BY created_at ASC
+       LIMIT ?`,
+    )
+    .all(orchestratorAgentId, limit) as any[];
+
+  return rows.map((row) => ({
+    id: row.id,
+    orchestrator_agent_id: row.orchestrator_agent_id,
+    sender_type: row.sender_type,
+    receiver_type: row.receiver_type,
+    message: row.message,
+    metadata: safeParse(row.metadata),
+    summary: row.summary ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+}
+
+/**
+ * Get the total count of messages for a specific orchestrator agent.
+ */
+export function getTurnCount(orchestratorAgentId: string): number {
+  const result = db()
+    .prepare(`SELECT COUNT(*) AS count FROM orchestrator_chat WHERE orchestrator_agent_id = ?`)
+    .get(orchestratorAgentId) as any;
+  return result?.count ?? 0;
 }
