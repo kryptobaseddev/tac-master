@@ -60,8 +60,8 @@ function formatTime(timestamp: string | Date) {
   padding: var(--spacing-md);
   border-radius: 12px;
   border-bottom-left-radius: 4px;
-  background: rgba(139, 92, 246, 0.08);
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  background: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.3);
   word-wrap: break-word;
 }
 
@@ -78,7 +78,7 @@ function formatTime(timestamp: string | Date) {
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #8b5cf6;
+  color: #06b6d4;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -113,10 +113,10 @@ function formatTime(timestamp: string | Date) {
 .expand-button {
   align-self: flex-start;
   padding: 4px 12px;
-  background: rgba(139, 92, 246, 0.15);
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.3);
   border-radius: 6px;
-  color: #8b5cf6;
+  color: #06b6d4;
   font-size: 0.7rem;
   font-weight: 600;
   cursor: pointer;
@@ -127,7 +127,7 @@ function formatTime(timestamp: string | Date) {
 }
 
 .expand-button:hover {
-  background: rgba(139, 92, 246, 0.25);
-  border-color: rgba(139, 92, 246, 0.5);
+  background: rgba(6, 182, 212, 0.25);
+  border-color: rgba(6, 182, 212, 0.5);
 }
 </style>
