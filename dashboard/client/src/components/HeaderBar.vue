@@ -37,6 +37,7 @@ const store = useOrchestratorStore();
 
 const isConnected = computed(() => store.isConnected);
 const repos = computed(() => store.repos);
+const viewMode = computed(() => store.viewMode);
 
 // ── Nav tabs ─────────────────────────────────────────────────────
 const tabs = [
@@ -64,6 +65,16 @@ function shortSlug(url: string): string {
 function onRepoChange(e: Event) {
   const select = e.target as HTMLSelectElement;
   emit("update:currentRepoUrl", select.value);
+}
+
+// ── View mode toggle ────────────────────────────────────────────
+function toggleViewMode() {
+  store.toggleViewMode();
+}
+
+// ── Command palette ─────────────────────────────────────────────
+function openCommandPalette() {
+  store.showCommandPalette();
 }
 </script>
 
@@ -94,10 +105,30 @@ function onRepoChange(e: Event) {
       >
         {{ tab.label.toUpperCase() }}
       </button>
+
+      <!-- View mode toggle (T135) -->
+      <button
+        class="hb__toggle-btn"
+        :class="{ 'hb__toggle-btn--active': viewMode === 'swimlanes' }"
+        :title="`Current mode: ${viewMode === 'swimlanes' ? 'ADW LANES' : 'DASHBOARD'}`"
+        @click="toggleViewMode"
+      >
+        {{ viewMode === 'swimlanes' ? 'ADW LANES' : 'DASHBOARD' }}
+      </button>
     </nav>
 
     <!-- ── Right: repo selector + icons ──────────────── -->
     <div class="hb__right">
+      <!-- Cmd+K hint badge (T135) -->
+      <button
+        class="hb__cmd-k-badge"
+        title="Open command palette"
+        aria-label="Open command palette (Cmd+K)"
+        @click="openCommandPalette"
+      >
+        <span class="hb__cmd-k-text">⌘K</span>
+      </button>
+
       <div class="hb__repo-selector">
         <span class="hb__repo-label">CURRENT_REPO</span>
         <div class="hb__repo-dropdown-wrap">
@@ -209,6 +240,34 @@ function onRepoChange(e: Event) {
   text-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
 }
 
+/* View mode toggle button (T135) */
+.hb__toggle-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--cc-text-muted, #666);
+  font-size: 10px;
+  font-family: var(--cc-font, ui-monospace, monospace);
+  letter-spacing: 0.1em;
+  padding: 5px 14px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all var(--cc-transition, 0.15s ease);
+  margin-left: 4px;
+}
+
+.hb__toggle-btn:hover {
+  color: var(--cc-text, #e0e0e0);
+  background: var(--cc-surface-raised, #161616);
+  border-color: var(--cc-border-mid, #222);
+}
+
+.hb__toggle-btn--active {
+  color: var(--cc-cyan, #00ffcc);
+  background: var(--cc-cyan-dim, rgba(0, 255, 204, 0.1));
+  border-color: rgba(0, 255, 204, 0.3);
+  text-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
+}
+
 /* ── Right cluster ───────────────────────────────────────────── */
 .hb__right {
   display: flex;
@@ -291,6 +350,36 @@ function onRepoChange(e: Event) {
   color: var(--cc-cyan, #00ffcc);
   border-color: var(--cc-border-mid, #222);
   background: var(--cc-surface-raised, #161616);
+}
+
+/* Cmd+K badge (T135) */
+.hb__cmd-k-badge {
+  background: var(--cc-surface-raised, #161616);
+  border: 1px solid var(--cc-border-mid, #222);
+  color: var(--cc-text-muted, #666);
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 9px;
+  font-family: var(--cc-font, ui-monospace, monospace);
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--cc-transition, 0.15s ease);
+  min-width: 32px;
+  text-align: center;
+}
+
+.hb__cmd-k-badge:hover {
+  color: var(--cc-cyan, #00ffcc);
+  border-color: var(--cc-cyan, #00ffcc);
+  background: var(--cc-surface-raised, #161616);
+}
+
+.hb__cmd-k-text {
+  font-weight: 500;
+  letter-spacing: 0.04em;
 }
 
 /* cc-dot & cc-pulse defined in command-center.css */
