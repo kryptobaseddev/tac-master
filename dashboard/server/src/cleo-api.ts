@@ -14,7 +14,7 @@
  * @epic T036 T042
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { logOperatorAction } from "./db";
@@ -53,7 +53,26 @@ export interface TaskDetail extends TaskSummary {
 
 const DB_CANDIDATES = [process.env.CLEO_TASKS_DB,"/srv/tac-master/state/cleo-tasks.db","/mnt/projects/agentic-engineer/.cleo/tasks.db"].filter(Boolean) as string[];
 
+// Sync timestamp file written by cleo-sync.sh after each successful push
+const SYNC_TS_FILE = process.env.CLEO_SYNC_TS ?? "/srv/tac-master/state/.cleo_sync_ts";
+
 function resolveDbPath(): string|null { for (const p of DB_CANDIDATES) { if (existsSync(p)) return p; } return null; }
+
+/**
+ * Returns how many seconds ago the last successful cleo-sync ran.
+ * Returns null if the timestamp file doesn't exist (first boot / dev machine).
+ */
+export function getCleoSyncAge(): number|null {
+  try {
+    const raw = readFileSync(SYNC_TS_FILE, "utf8").trim();
+    if (!raw) return null;
+    const ts = new Date(raw).getTime();
+    if (isNaN(ts)) return null;
+    return Math.max(0, Math.round((Date.now() - ts) / 1000));
+  } catch {
+    return null;
+  }
+}
 
 let _db: Database|null=null; let _dbPath: string|null=null;
 let _dbWrite: Database|null=null; let _dbWritePath: string|null=null;
@@ -146,10 +165,13 @@ function extractGithubUrl(texts:string[], repoSlug="kryptobaseddev/tac-master"):
   return null;
 }
 
-export function getEpics():{epics:EpicSummary[];dbPath:string|null;error?:string} {
+export function getEpics():{epics:EpicSummary[];dbPath:string|null;stale:boolean;stale_seconds:number|null;error?:string} {
   const dbPath=resolveDbPath();
+  // Staleness: read .cleo_sync_ts written by cleo-sync.sh
+  const stale_seconds=getCleoSyncAge();
+  const stale=stale_seconds===null||stale_seconds>60;
   const rows=query<Record<string,unknown>>(`SELECT id,title,status,priority,size,labels_json FROM tasks WHERE type='epic' AND (archived_at IS NULL OR archived_at='') ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, created_at ASC`);
-  if (rows===null) return {epics:[],dbPath,error:dbPath?"Failed to query tasks.db":"tasks.db not found — set CLEO_TASKS_DB or copy to /srv/tac-master/state/cleo-tasks.db"};
+  if (rows===null) return {epics:[],dbPath,stale,stale_seconds,error:dbPath?"Failed to query tasks.db":"tasks.db not found — set CLEO_TASKS_DB or copy to /srv/tac-master/state/cleo-tasks.db"};
   const epics:EpicSummary[]=rows.map(r=>{
     // Use recursive descendant count so nested sub-tasks are included
     const {total,done,active}=countDescendants(String(r.id));
@@ -166,7 +188,7 @@ export function getEpics():{epics:EpicSummary[];dbPath:string|null;error?:string
     const pct=progress.total>0?Math.round((progress.done/progress.total)*100):0;
     return{id:String(r.id),title:String(r.title??""),status:String(r.status??"pending"),priority:String(r.priority??"medium"),size:r.size?String(r.size):null,labels:parseJson<string[]>(r.labels_json as string|null,[]),progress,pct};
   });
-  return {epics,dbPath};
+  return {epics,dbPath,stale,stale_seconds};
 }
 
 export function getTasksByParent(parentId:string, includeDepends=false):TaskSummary[] {

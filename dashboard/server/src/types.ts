@@ -12,6 +12,8 @@ export interface HookEvent {
   timestamp?: number; // unix ms
   adw_id?: string; // denormalized from payload for fast filtering
   phase?: string; // optional phase label (plan, build, test, review, ...)
+  // T091: block type discriminator set by enhanced send_event.py (T068)
+  block_type?: "text_block" | "thinking_block" | "tool_use_block" | "hook_lifecycle";
 }
 
 // Streaming block types for WebSocket events (T058 spec)
@@ -53,16 +55,71 @@ export interface HeartbeatData {
   active_clients: number;
 }
 
+export interface OrchestratorAgent {
+  id: string;
+  session_id: string | null;
+  system_prompt: string | null;
+  status: string;
+  working_dir: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_cost: number;
+  archived: number;
+  metadata: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AgentInstance {
+  id: string;
+  orchestrator_agent_id: string;
+  name: string;
+  model: string;
+  system_prompt: string | null;
+  working_dir: string | null;
+  git_worktree: string | null;
+  status: string;
+  session_id: string | null;
+  adw_id: string | null;
+  adw_step: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_cost: number;
+  archived: number;
+  metadata: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface ChatMessage {
   id: string;
   orchestrator_agent_id: string;
-  sender_type: "user" | "orchestrator";
+  sender_type: "user" | "orchestrator" | "agent";
   receiver_type: string;
   message: string;
-  metadata: Record<string, unknown>;
   summary?: string | null;
+  agent_id?: string | null;
+  session_id?: string | null;
+  metadata: Record<string, unknown>;
   created_at: number;
   updated_at: number;
+}
+
+export interface SystemLog {
+  id: string;
+  orchestrator_agent_id: string | null;
+  agent_id: string | null;
+  session_id: string | null;
+  adw_id: string | null;
+  adw_step: string | null;
+  level: string;
+  log_type: string;
+  event_type: string | null;
+  content: string | null;
+  payload: Record<string, unknown>;
+  summary?: string | null;
+  entry_index: number | null;
+  timestamp: number;
 }
 
 export type WsMessage =

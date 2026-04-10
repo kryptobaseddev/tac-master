@@ -63,8 +63,65 @@ export interface RepoStatus {
   last_activity_at: number | null;
 }
 
+// Chat WS event types (T089 — orchestrator_chat messages)
+export interface ChatWsMessage {
+  type: "orchestrator_chat";
+  message: {
+    id: string;
+    orchestrator_agent_id: string;
+    sender_type: "user" | "orchestrator";
+    receiver_type: "user" | "orchestrator";
+    message: string;
+    metadata: Record<string, any>;
+    timestamp: number;
+  };
+}
+
+// Thinking block WS event (T089)
+export interface ThinkingBlockWsMessage {
+  type: "thinking_block";
+  data: {
+    id: string;
+    orchestrator_agent_id: string;
+    thinking: string;
+    timestamp: number;
+  };
+}
+
+// Tool use block WS event (T089)
+export interface ToolUseBlockWsMessage {
+  type: "tool_use_block";
+  data: {
+    id: string;
+    orchestrator_agent_id: string;
+    tool_name: string;
+    tool_input: Record<string, any>;
+    tool_use_id: string;
+    timestamp: number;
+  };
+}
+
+// Chat typing indicator WS event (T089)
+export interface ChatTypingWsMessage {
+  type: "chat_typing";
+  orchestrator_agent_id: string;
+  is_typing: boolean;
+}
+
+// Chat stream complete WS event (T089)
+export interface ChatStreamWsMessage {
+  type: "chat_stream";
+  chunk: string;
+  is_complete: boolean;
+}
+
 export type TacWsMessage =
   | { type: "initial"; data: HookEvent[] }
   | { type: "event"; data: HookEvent }
   | { type: "run_update"; data: RunSummary }
-  | { type: "repo_status"; data: RepoStatus };
+  | { type: "repo_status"; data: RepoStatus }
+  | ChatWsMessage
+  | ThinkingBlockWsMessage
+  | ToolUseBlockWsMessage
+  | ChatTypingWsMessage
+  | ChatStreamWsMessage;

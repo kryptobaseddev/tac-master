@@ -28,6 +28,9 @@ import {
   insertChatMessage,
   getChatHistory,
   getTurnCount,
+  getActiveOrchestrator,
+  getChatHistoryFromTacMaster,
+  getSystemLogs,
 } from "./db";
 import {
   getReposConfig,
@@ -128,18 +131,19 @@ function json(body: unknown, status = 200): Response {
 
 const wsManager = new WebSocketManager();
 
-// Broadcast run/repo status updates every 5s so the UI is self-refreshing
-// even without hook events firing.
+// 30-second heartbeat — keeps connections alive and signals liveness to clients.
+// Heavy status data (repo_status, run_update) is no longer polled; it is pushed
+// immediately when hook events arrive via POST /events.
 setInterval(() => {
   try {
-    const repos = getRepoStatuses();
-    const runs = getActiveAndRecentRuns(30);
-    for (const r of repos) wsManager.broadcast({ type: "repo_status", data: r });
-    for (const run of runs) wsManager.broadcast({ type: "run_update", data: run });
+    wsManager.broadcast({
+      type: "heartbeat",
+      data: { timestamp: Date.now(), active_clients: wsManager.size() },
+    });
   } catch (e) {
-    console.error("[poll] error:", e);
+    console.error("[heartbeat] error:", e);
   }
-}, 5000);
+}, 30_000);
 
 // Daemon activity sync — every 30s check tac_master.sqlite for new runs
 // and forward them into the operator_log so the operator sees daemon activity.

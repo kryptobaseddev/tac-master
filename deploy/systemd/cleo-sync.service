@@ -1,0 +1,21 @@
+[Unit]
+Description=CLEO tasks.db bidirectional sync (dev machine to LXC 114)
+Documentation=https://github.com/kryptobaseddev/tac-master
+# Run only if network is up — soft dependency (won't fail if already active)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Load SSH credentials for LXC access
+EnvironmentFile=-/mnt/projects/agentic-engineer/.tac-master-creds.env
+# Script resolves its own path relative to TAC_MASTER_HOME
+ExecStart=/mnt/projects/agentic-engineer/tac-master/scripts/cleo-sync.sh
+# Prevent partial writes from corrupting the DB on the LXC side
+TimeoutStartSec=30
+# Log to journal (journalctl --user -u cleo-sync)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

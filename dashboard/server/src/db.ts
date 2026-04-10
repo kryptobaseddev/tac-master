@@ -10,7 +10,16 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { HookEvent, RepoStatus, RunSummary, FilterOptions } from "./types";
+import type {
+  HookEvent,
+  RepoStatus,
+  RunSummary,
+  FilterOptions,
+  OrchestratorAgent,
+  AgentInstance,
+  ChatMessage,
+  SystemLog,
+} from "./types";
 
 const DASHBOARD_DB = process.env.TAC_DASHBOARD_DB ?? "./dashboard.sqlite";
 const TAC_MASTER_DB =
@@ -980,4 +989,127 @@ export function getTurnCount(orchestratorAgentId: string): number {
     .prepare(`SELECT COUNT(*) AS count FROM orchestrator_chat WHERE orchestrator_agent_id = ?`)
     .get(orchestratorAgentId) as any;
   return result?.count ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Read-only queries into tac_master.sqlite orchestrator tables (T112)
+// ---------------------------------------------------------------------------
+
+/**
+ * Get the most recently created active orchestrator session.
+ * Queries orchestrator_agents WHERE archived=0 ORDER BY created_at DESC LIMIT 1.
+ * Returns null if no active session exists.
+ */
+export function getActiveOrchestrator(): OrchestratorAgent | null {
+  if (!tacDb) return null;
+
+  try {
+    const row = tacDb
+      .prepare(
+        `SELECT * FROM orchestrator_agents
+         WHERE archived = 0
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get() as any | undefined;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      session_id: row.session_id ?? null,
+      system_prompt: row.system_prompt ?? null,
+      status: row.status,
+      working_dir: row.working_dir ?? null,
+      input_tokens: row.input_tokens ?? 0,
+      output_tokens: row.output_tokens ?? 0,
+      total_cost: row.total_cost ?? 0.0,
+      archived: row.archived ?? 0,
+      metadata: safeParse(row.metadata),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  } catch (e) {
+    console.error("[getActiveOrchestrator] query failed:", e);
+    return null;
+  }
+}
+
+/**
+ * Get chat message history for a specific orchestrator agent from tac_master.sqlite.
+ * Queries chat_messages WHERE orchestrator_agent_id = ? ORDER BY created_at ASC.
+ * Returns rows sorted oldest-first.
+ */
+export function getChatHistoryFromTacMaster(
+  orchestratorAgentId: string,
+  limit = 200,
+): ChatMessage[] {
+  if (!tacDb) return [];
+
+  try {
+    const rows = tacDb
+      .prepare(
+        `SELECT * FROM chat_messages
+         WHERE orchestrator_agent_id = ?
+         ORDER BY created_at ASC
+         LIMIT ?`,
+      )
+      .all(orchestratorAgentId, limit) as any[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      orchestrator_agent_id: row.orchestrator_agent_id,
+      sender_type: row.sender_type,
+      receiver_type: row.receiver_type,
+      message: row.message,
+      summary: row.summary ?? null,
+      agent_id: row.agent_id ?? null,
+      session_id: row.session_id ?? null,
+      metadata: safeParse(row.metadata),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    }));
+  } catch (e) {
+    console.error("[getChatHistoryFromTacMaster] query failed:", e);
+    return [];
+  }
+}
+
+/**
+ * Get system logs for a specific session from tac_master.sqlite.
+ * Queries system_logs WHERE session_id = ? ORDER BY timestamp ASC.
+ */
+export function getSystemLogs(sessionId: string, limit = 500): SystemLog[] {
+  if (!tacDb) return [];
+
+  try {
+    const rows = tacDb
+      .prepare(
+        `SELECT * FROM system_logs
+         WHERE session_id = ?
+         ORDER BY timestamp ASC
+         LIMIT ?`,
+      )
+      .all(sessionId, limit) as any[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      orchestrator_agent_id: row.orchestrator_agent_id ?? null,
+      agent_id: row.agent_id ?? null,
+      session_id: row.session_id ?? null,
+      adw_id: row.adw_id ?? null,
+      adw_step: row.adw_step ?? null,
+      level: row.level,
+      log_type: row.log_type,
+      event_type: row.event_type ?? null,
+      content: row.content ?? null,
+      payload: safeParse(row.payload),
+      summary: row.summary ?? null,
+      entry_index: row.entry_index ?? null,
+      timestamp: row.timestamp,
+    }));
+  } catch (e) {
+    console.error("[getSystemLogs] query failed:", e);
+    return [];
+  }
 }

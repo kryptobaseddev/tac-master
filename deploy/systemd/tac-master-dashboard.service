@@ -16,6 +16,8 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/krypto/.bun/bin
 Environment=TAC_MASTER_HOME=/srv/tac-master
 Environment=TAC_MASTER_DB=/srv/tac-master/state/tac_master.sqlite
 Environment=TAC_DASHBOARD_DB=/srv/tac-master/state/dashboard.sqlite
+Environment=CLEO_TASKS_DB=/srv/tac-master/state/cleo-tasks.db
+Environment=CLEO_SYNC_TS=/srv/tac-master/state/.cleo_sync_ts
 Environment=PORT=4000
 ExecStart=/home/krypto/.bun/bin/bun src/index.ts
 Restart=always

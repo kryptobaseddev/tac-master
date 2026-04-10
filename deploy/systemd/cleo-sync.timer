@@ -1,0 +1,15 @@
+[Unit]
+Description=CLEO tasks.db sync timer — fires every 30 seconds
+Documentation=https://github.com/kryptobaseddev/tac-master
+
+[Timer]
+# Fire 10 seconds after boot, then every 30 seconds
+OnBootSec=10s
+OnUnitActiveSec=30s
+# Use wall-clock accuracy of 1 second for responsive sync
+AccuracySec=1s
+# Persist timer across reboots so we don't miss a large gap
+Persistent=true
+
+[Install]
+WantedBy=timers.target
