@@ -325,6 +325,209 @@ export function getActiveAndRecentRuns(limit = 50): RunSummary[] {
 }
 
 // ---------------------------------------------------------------------------
+// Swimlane ADW summary with events grouped by phase (T123)
+// ---------------------------------------------------------------------------
+
+/**
+ * AdwSummary interface for swimlane visualization.
+ * Maps tac_master.sqlite runs to dashboard.sqlite events grouped by phase.
+ */
+export interface AdwSummaryResult {
+  id: string; // adw_id
+  workflow_type: string;
+  adw_name: string;
+  status: string; // mapped from runs.status
+  started_at?: number | null;
+  duration_seconds?: number | null;
+  events_by_step: Record<string, Array<{
+    id: string;
+    adw_id: string;
+    adw_step: string | null;
+    event_category: string;
+    event_type: string;
+    summary: string | null;
+    payload: Record<string, unknown> | null;
+    timestamp: string;
+  }>>;
+}
+
+/**
+ * Get recent ADWs with their events grouped by phase.
+ * Queries tac_master.sqlite runs table for recent ADWs, then joins with
+ * dashboard.sqlite events table grouped by phase column.
+ *
+ * Status mapping:
+ *  - pending → pending
+ *  - running → in_progress
+ *  - succeeded → completed
+ *  - failed, aborted → failed
+ *
+ * @task T123
+ */
+export function getAdwsWithEvents(limit = 50): AdwSummaryResult[] {
+  if (!tacDb) return [];
+
+  // Query recent runs from tac_master, ordered by started_at DESC
+  let runs: any[];
+  try {
+    runs = tacDb
+      .prepare(
+        `SELECT r.adw_id, r.workflow, r.status, r.started_at, r.ended_at
+         FROM runs r
+         ORDER BY
+           CASE WHEN r.status IN ('pending','running') THEN 0 ELSE 1 END,
+           COALESCE(r.started_at, 0) DESC
+         LIMIT ?`,
+      )
+      .all(limit) as any[];
+  } catch {
+    runs = [];
+  }
+
+  if (runs.length === 0) return [];
+
+  // For each run, fetch events from dashboard.sqlite grouped by phase
+  const results: AdwSummaryResult[] = [];
+
+  for (const run of runs) {
+    const adwId = run.adw_id as string;
+
+    // Fetch events for this adw_id, grouped by phase
+    const eventRows = db()
+      .prepare(
+        `SELECT id, adw_id, phase, hook_event_type, summary, payload, timestamp
+         FROM events
+         WHERE adw_id = ?
+         ORDER BY timestamp ASC`,
+      )
+      .all(adwId) as any[];
+
+    // Group events by phase
+    const eventsByStep: Record<string, Array<{
+      id: string;
+      adw_id: string;
+      adw_step: string | null;
+      event_category: string;
+      event_type: string;
+      summary: string | null;
+      payload: Record<string, unknown> | null;
+      timestamp: string;
+    }>> = {};
+
+    for (const row of eventRows) {
+      const phase = row.phase ?? "unknown";
+      if (!eventsByStep[phase]) {
+        eventsByStep[phase] = [];
+      }
+
+      eventsByStep[phase].push({
+        id: String(row.id),
+        adw_id: row.adw_id,
+        adw_step: null,
+        event_category: "hook_event",
+        event_type: row.hook_event_type,
+        summary: row.summary ?? null,
+        payload: safeParse(row.payload),
+        timestamp: new Date(Number(row.timestamp)).toISOString(),
+      });
+    }
+
+    // Map status
+    const statusMap: Record<string, string> = {
+      pending: "pending",
+      running: "in_progress",
+      succeeded: "completed",
+      failed: "failed",
+      aborted: "failed",
+    };
+    const mappedStatus = statusMap[run.status] ?? run.status;
+
+    // Compute duration_seconds
+    let durationSeconds: number | null = null;
+    if (run.started_at != null && run.ended_at != null) {
+      // Timestamps may be unix seconds or milliseconds (> 1e9 = seconds)
+      const startMs = Number(run.started_at) > 1e9 ? Number(run.started_at) : Number(run.started_at) * 1000;
+      const endMs = Number(run.ended_at) > 1e9 ? Number(run.ended_at) : Number(run.ended_at) * 1000;
+      if (endMs > startMs) {
+        durationSeconds = Math.round((endMs - startMs) / 1000);
+      }
+    }
+
+    // Build adw_name (use adw_id for now; could extend with issue info)
+    const adwName = adwId;
+
+    results.push({
+      id: adwId,
+      workflow_type: run.workflow,
+      adw_name: adwName,
+      status: mappedStatus,
+      started_at: run.started_at,
+      duration_seconds: durationSeconds,
+      events_by_step: eventsByStep,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Get events for a specific ADW grouped by phase.
+ * Useful for drilling down into a single run's event timeline.
+ *
+ * @task T123
+ */
+export function getAdwEventsByStep(adwId: string): Record<string, Array<{
+  id: string;
+  adw_id: string;
+  adw_step: string | null;
+  event_category: string;
+  event_type: string;
+  summary: string | null;
+  payload: Record<string, unknown> | null;
+  timestamp: string;
+}>> {
+  const eventRows = db()
+    .prepare(
+      `SELECT id, adw_id, phase, hook_event_type, summary, payload, timestamp
+       FROM events
+       WHERE adw_id = ?
+       ORDER BY timestamp ASC`,
+    )
+    .all(adwId) as any[];
+
+  const eventsByStep: Record<string, Array<{
+    id: string;
+    adw_id: string;
+    adw_step: string | null;
+    event_category: string;
+    event_type: string;
+    summary: string | null;
+    payload: Record<string, unknown> | null;
+    timestamp: string;
+  }>> = {};
+
+  for (const row of eventRows) {
+    const phase = row.phase ?? "unknown";
+    if (!eventsByStep[phase]) {
+      eventsByStep[phase] = [];
+    }
+
+    eventsByStep[phase].push({
+      id: String(row.id),
+      adw_id: row.adw_id,
+      adw_step: null,
+      event_category: "hook_event",
+      event_type: row.hook_event_type,
+      summary: row.summary ?? null,
+      payload: safeParse(row.payload),
+      timestamp: new Date(Number(row.timestamp)).toISOString(),
+    });
+  }
+
+  return eventsByStep;
+}
+
+// ---------------------------------------------------------------------------
 // Phase breakdown for a specific run (T038)
 // ---------------------------------------------------------------------------
 

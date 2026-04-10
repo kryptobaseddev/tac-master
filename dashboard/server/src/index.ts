@@ -20,6 +20,8 @@ import {
   getFilterOptions,
   getRepoStatuses,
   getActiveAndRecentRuns,
+  getAdwsWithEvents,
+  getAdwEventsByStep,
   getLessons,
   getRunPhases,
   getRunPhaseSummary,
@@ -108,6 +110,7 @@ systemctl restart tac-master-dashboard</code></pre>
       <li><a href="/health">GET /health</a></li>
       <li><a href="/api/repos">GET /api/repos</a></li>
       <li><a href="/api/runs">GET /api/runs</a></li>
+      <li><a href="/api/adws">GET /api/adws</a></li>
       <li><a href="/api/lessons">GET /api/lessons</a></li>
       <li><a href="/events/recent">GET /events/recent</a></li>
       <li><a href="/events/filter-options">GET /events/filter-options</a></li>
@@ -354,6 +357,22 @@ const server = Bun.serve({
     if (url.pathname === "/api/runs" && req.method === "GET") {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       return json({ runs: getActiveAndRecentRuns(limit) });
+    }
+
+    // --- Swimlane ADWs with events grouped by phase (T123) ---
+    // GET /api/adws
+    // Returns AdwSummary[] with events_by_step map for swimlane visualization.
+    // Supports ?limit=N query param (default 50).
+    // Maps runs.status: pending→pending, running→in_progress, succeeded→completed, failed/aborted→failed.
+    // Returns empty array when no runs exist.
+    if (url.pathname === "/api/adws" && req.method === "GET") {
+      try {
+        const limit = Number(url.searchParams.get("limit") ?? 50);
+        const adws = getAdwsWithEvents(limit);
+        return json(adws);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
     }
 
     // --- Phase breakdown for a specific run (T038) ---
