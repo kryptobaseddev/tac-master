@@ -25,6 +25,9 @@ import {
   getAggregateStats,
   logOperatorAction,
   getOperatorLog,
+  insertChatMessage,
+  getChatHistory,
+  getTurnCount,
 } from "./db";
 import {
   getReposConfig,
@@ -44,6 +47,7 @@ import {
   type RepoEntry,
 } from "./config";
 import type { HookEvent, WsMessage } from "./types";
+import { WebSocketManager } from "./ws-manager";
 import { getEpics, getTasksByParent, getTaskById, getCleoStats, addTaskNote, updateTaskStatus, createTask, queueTask, getTaskLinks, type CreateTaskBody } from "./cleo-api";
 import { readFile } from "node:fs/promises";
 import { parseStreamFile, resolveStreamPath, listStreamPhases } from "./stream-parser";
@@ -122,18 +126,7 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-const clients = new Set<any>();
-
-function broadcast(msg: WsMessage): void {
-  const payload = JSON.stringify(msg);
-  for (const ws of clients) {
-    try {
-      ws.send(payload);
-    } catch {
-      clients.delete(ws);
-    }
-  }
-}
+const wsManager = new WebSocketManager();
 
 // Broadcast run/repo status updates every 5s so the UI is self-refreshing
 // even without hook events firing.
@@ -141,8 +134,8 @@ setInterval(() => {
   try {
     const repos = getRepoStatuses();
     const runs = getActiveAndRecentRuns(30);
-    for (const r of repos) broadcast({ type: "repo_status", data: r });
-    for (const run of runs) broadcast({ type: "run_update", data: run });
+    for (const r of repos) wsManager.broadcast({ type: "repo_status", data: r });
+    for (const run of runs) wsManager.broadcast({ type: "run_update", data: run });
   } catch (e) {
     console.error("[poll] error:", e);
   }
@@ -201,7 +194,7 @@ const server = Bun.serve({
       return json({
         status: "ok",
         service: "tac-master-dashboard",
-        clients: clients.size,
+        clients: wsManager.size(),
       });
     }
 
@@ -213,7 +206,7 @@ const server = Bun.serve({
           return json({ error: "missing required fields" }, 400);
         }
         const saved = insertEvent(body);
-        broadcast({ type: "event", data: saved });
+        wsManager.broadcast({ type: "event", data: saved });
         return json(saved, 201);
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 400);
@@ -694,7 +687,7 @@ const server = Bun.serve({
           } catch {
             return json({
               type: "status",
-              data: { status: "ok", service: "tac-master-dashboard", clients: clients.size },
+              data: { status: "ok", service: "tac-master-dashboard", clients: wsManager.size() },
             });
           }
         }
@@ -853,7 +846,7 @@ const server = Bun.serve({
 
   websocket: {
     open(ws) {
-      clients.add(ws);
+      wsManager.add(ws);
       // Hydrate with recent events + current runs + repo statuses
       ws.send(
         JSON.stringify({
@@ -869,7 +862,7 @@ const server = Bun.serve({
       }
     },
     close(ws) {
-      clients.delete(ws);
+      wsManager.remove(ws);
     },
     message(_ws, _msg) {
       // reserved for future client → server commands (pause, filter sync)
