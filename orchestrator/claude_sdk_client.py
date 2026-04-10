@@ -479,6 +479,7 @@ class ClaudeSDKClient:
         cmd = [
             self._cli,
             "--print",
+            "--verbose",
             "--output-format", "stream-json",
             "--input-format", "text",
             "--dangerously-skip-permissions",
