@@ -13,6 +13,69 @@
 // Re-export everything from the orchestrator-ported types
 export * from "./orchestrator-types";
 
+// ---- Swimlane & Observability Types (T122) ----
+
+/**
+ * AdwSummary: Swimlane-compatible shape representing a workflow run.
+ * Adapted from RunSummary with tac-master column names.
+ */
+export interface AdwSummary {
+  id: string; // maps to adw_id in runs table
+  workflow_type: string; // maps to workflow column
+  adw_name: string;
+  status: string; // from runs.status enum
+  started_at?: number | null;
+  duration_seconds?: number | null;
+  events_by_step?: Record<string, Array<{
+    id: string;
+    adw_id: string;
+    adw_step: string | null;
+    event_category: string;
+    event_type: string;
+    summary: string | null;
+    payload: Record<string, unknown> | null;
+    timestamp: string;
+  }>>;
+}
+
+/**
+ * CostMetrics: Session cost tracking and burn rate analysis.
+ */
+export interface CostMetrics {
+  sessionCost: number; // USD
+  inputTokens: number;
+  outputTokens: number;
+  totalCost: number; // USD
+  burnRatePerHour: number; // USD/hour
+}
+
+/**
+ * SystemInfo: Orchestrator system information for CommandPalette and UI.
+ */
+export interface SystemInfo {
+  session_id: string;
+  working_dir: string;
+  slash_commands: Array<{
+    name: string;
+    description: string;
+  }>;
+  adw_workflows: Array<{
+    name: string;
+    display_name: string;
+    description: string;
+  }>;
+  orchestrator_tools: string[];
+}
+
+/**
+ * AdwWorkflowDef: Workflow definition with display metadata.
+ */
+export interface AdwWorkflowDef {
+  name: string;
+  display_name: string;
+  description: string;
+}
+
 // ---- tac-master-native shapes (come straight from the Bun server) ----
 
 export interface HookEvent {
