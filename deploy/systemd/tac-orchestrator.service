@@ -1,0 +1,50 @@
+[Unit]
+Description=tac-orchestrator HTTP server (Claude SDK persistent session)
+Documentation=https://github.com/kryptobaseddev/tac-master
+After=tac-master.service
+Wants=tac-master.service
+
+[Service]
+Type=simple
+User=krypto
+Group=krypto
+WorkingDirectory=/srv/tac-master
+EnvironmentFile=-/srv/tac-master/config/identity.env
+Environment=TAC_MASTER_HOME=/srv/tac-master
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/krypto/.local/bin:/home/krypto/.cargo/bin
+# uv needs a writable cache — /home is read-only due to ProtectHome.
+Environment=UV_CACHE_DIR=/srv/tac-master/state/uv-cache
+Environment=UV_PYTHON_INSTALL_DIR=/srv/tac-master/state/uv-python
+Environment=ORCHESTRATOR_PORT=4001
+Environment=ORCHESTRATOR_HOST=0.0.0.0
+Environment=ORCHESTRATOR_LOG_LEVEL=info
+ExecStart=/home/krypto/.local/bin/uv run python -m orchestrator.orchestrator_main
+Restart=on-failure
+RestartSec=5
+# Give the orchestrator time to finish any active execution on shutdown
+TimeoutStopSec=40
+KillSignal=SIGTERM
+KillMode=mixed
+
+# Security hardening suitable for an LXC container
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+# claude CLI needs to write ~/.claude.json (config cache), ~/.claude/ (sessions),
+# and ~/.cache/ms-playwright (browser cache). /srv/tac-master is the service's
+# own data. Everything else in /home stays read-only.
+ReadWritePaths=/srv/tac-master /home/krypto/.claude /home/krypto/.claude.json /home/krypto/.cache
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+
+# Logging
+StandardOutput=append:/srv/tac-master/logs/orchestrator.stdout.log
+StandardError=append:/srv/tac-master/logs/orchestrator.stderr.log
+
+[Install]
+WantedBy=multi-user.target

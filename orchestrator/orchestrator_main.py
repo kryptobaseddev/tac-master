@@ -69,6 +69,7 @@ from pydantic import BaseModel  # noqa: E402
 from orchestrator.config import load_config  # noqa: E402
 from orchestrator.orchestrator_agent import OrchestratorAgentModel  # noqa: E402
 from orchestrator.orchestrator_service import OrchestratorService  # noqa: E402
+from orchestrator.state_store import StateStore  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -125,6 +126,14 @@ async def _lifespan(app: FastAPI):  # noqa: ARG001
             "Config load failed (%s) — falling back to default SQLite path", exc
         )
         db_path = str(_TAC_MASTER_ROOT / "state" / "tac_master.sqlite")
+
+    # Ensure schema is initialized (creates orchestrator_agents table if needed)
+    try:
+        store = StateStore(Path(db_path))
+        store.close()
+        log.info("Database schema initialised")
+    except Exception as exc:
+        log.warning("Schema initialisation failed (%s) — continuing anyway", exc)
 
     # Read active session_id for resumption
     session_id: str | None = None

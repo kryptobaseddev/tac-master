@@ -448,6 +448,133 @@ sqlite3 /srv/tac-master/state/tac_master.sqlite \
 
 ---
 
+## Orchestrator Brain
+
+The **tac-orchestrator** service (systemd: `tac-orchestrator.service`) runs a persistent Claude SDK session on port 4001. It maintains long-lived agent state and conversation history across restarts, enabling the orchestrator to reason over prior decisions and continue interrupted work.
+
+### Service Management
+
+**Start the service:**
+
+```bash
+systemctl start tac-orchestrator
+```
+
+**Stop the service:**
+
+```bash
+systemctl stop tac-orchestrator
+```
+
+**Restart the service:**
+
+```bash
+systemctl restart tac-orchestrator
+```
+
+**Check status (including session_id and cost metrics):**
+
+```bash
+systemctl status tac-orchestrator
+curl http://localhost:4001/status | jq .
+```
+
+**Enable to start on boot:**
+
+```bash
+systemctl enable tac-orchestrator
+```
+
+### Session State
+
+On startup, the orchestrator checks the SQLite database for an active `orchestrator_agents` row:
+
+- **Fresh install** (no row): Logs "No active orchestrator row found — starting fresh session" and initializes a new Claude SDK session.
+- **Resumption** (existing row with session_id): Logs "Resuming existing Claude SDK session …<session_id>" and restores the prior conversation context.
+
+If the database table doesn't exist yet, the initialization code will create it automatically on first run.
+
+### Session Reset
+
+To discard the current session and start fresh:
+
+1. Stop the service:
+   ```bash
+   systemctl stop tac-orchestrator
+   ```
+
+2. Clear the active session from the database:
+   ```bash
+   sqlite3 /srv/tac-master/state/tac_master.sqlite \
+     "DELETE FROM orchestrator_agents WHERE id = (SELECT id FROM orchestrator_agents ORDER BY created_at DESC LIMIT 1);"
+   ```
+
+3. Restart the service:
+   ```bash
+   systemctl start tac-orchestrator
+   ```
+
+### Log Files
+
+- **Service journal** (systemd logs, restarts, crashes):
+  ```bash
+  journalctl -u tac-orchestrator -f
+  ```
+
+- **stdout/stderr logs** (application output, Claude SDK traces):
+  ```bash
+  tail -f /srv/tac-master/logs/orchestrator.stdout.log
+  tail -f /srv/tac-master/logs/orchestrator.stderr.log
+  ```
+
+### Port 4001 Usage
+
+The orchestrator HTTP server listens on `127.0.0.1:4001` (or `0.0.0.0:4001` if `ORCHESTRATOR_HOST=0.0.0.0`):
+
+- **POST /chat** — Accept user messages from the dashboard; returns 202 immediately. The service processes asynchronously and broadcasts events back to the dashboard.
+- **GET /status** — Return session_id, cost_usd, input_tokens, output_tokens.
+- **POST /interrupt** — Interrupt a currently-executing Claude SDK subprocess.
+
+### Manual Test Commands
+
+**Verify the service is running:**
+
+```bash
+systemctl is-active tac-orchestrator
+curl -I http://localhost:4001/status
+```
+
+**Send a test message to the orchestrator (from the CLI):**
+
+```bash
+curl -X POST http://localhost:4001/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "Hello orchestrator, what are you working on?"}'
+```
+
+**Check session resumption:** After sending a message, note the session_id:
+
+```bash
+curl http://localhost:4001/status | jq .session_id
+```
+
+Stop and restart the service, then verify the same session_id appears (proving resumption):
+
+```bash
+systemctl stop tac-orchestrator && sleep 2
+systemctl start tac-orchestrator && sleep 2
+curl http://localhost:4001/status | jq .session_id  # should be same as before
+```
+
+**Inspect the orchestrator database table:**
+
+```bash
+sqlite3 /srv/tac-master/state/tac_master.sqlite \
+  'SELECT id, session_id, created_at, total_cost FROM orchestrator_agents;'
+```
+
+---
+
 ## Appendix — Paths and Services
 
 | Item | Path / Value |
@@ -463,6 +590,8 @@ sqlite3 /srv/tac-master/state/tac_master.sqlite \
 | Daemon service | `tac-master.service` |
 | Webhook service | `tac-master-webhook.service` |
 | Dashboard service | `tac-master-dashboard.service` |
+| Orchestrator service | `tac-orchestrator.service` |
 | Dashboard UI | `http://10.0.10.22:4000/` |
+| Orchestrator HTTP | `http://10.0.10.22:4001/` |
 | Webhook endpoint | `http://10.0.10.22:8088/webhook/github` |
 | Webhook health | `http://10.0.10.22:8088/health` |
