@@ -40,6 +40,9 @@ import SystemLogs from "./components/SystemLogs.vue";
 import CommandBar from "./components/CommandBar.vue";
 import Toast from "./components/Toast.vue";
 
+// T128: Cmd+K command palette overlay
+import CommandPalette from "./components/CommandPalette.vue";
+
 // Legacy pages (repos, config)
 import RepoBoard from "./components/RepoBoard.vue";
 import ConfigPage from "./components/ConfigPage.vue";
@@ -231,6 +234,9 @@ onMounted(() => {
 
   <!-- ── Toast overlay (T053) ──────────────────────────────── -->
   <Toast />
+
+  <!-- ── Cmd+K command palette overlay (T128) ──────────────── -->
+  <CommandPalette />
 
   <!-- ── Phase detail modal (T055) ─────────────────────────── -->
   <PhaseDetailModal
