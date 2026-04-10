@@ -44,6 +44,15 @@ export interface TaskSummary {
   children_done?: number;
 }
 
+export interface ExternalLink {
+  id: string;
+  url?: string;
+  external_url?: string;
+  title?: string;
+  type?: string;
+  label?: string;
+}
+
 export interface TaskDetail extends TaskSummary {
   description: string | null;
   notes: string[];
@@ -52,6 +61,7 @@ export interface TaskDetail extends TaskSummary {
   children: { id: string; title: string; status: string }[];
   github_url: string | null;
   assignee: string | null;
+  external_links?: ExternalLink[];
 }
 
 export const useCleoStore = defineStore("cleo", () => {

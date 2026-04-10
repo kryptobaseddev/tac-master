@@ -45,6 +45,8 @@ export interface RunSummary {
   input_tokens?: number;
   output_tokens?: number;
   total_cost_usd?: number;
+  // CLEO task association (optional)
+  cleo_task_id?: string | null;
 }
 
 export interface RepoStatus {

@@ -10,6 +10,8 @@
 
 export interface OpenFileResult {
   success: boolean;
+  /** 'success' | 'error' — for compatibility with callers checking result.status */
+  status?: 'success' | 'error';
   message?: string;
 }
 

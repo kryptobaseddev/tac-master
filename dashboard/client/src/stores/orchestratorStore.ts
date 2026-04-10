@@ -271,6 +271,17 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   const websocketEventCount = ref(0);
   const commandInputVisible = ref(false);
 
+  // --- view mode state (T118) ---
+  /** Current view mode for the center column: 'logs' or 'adws' */
+  const viewMode = ref<'logs' | 'adws'>('logs');
+
+  // --- file tracking events (T118) ---
+  /**
+   * Map of event ID → file tracking data (changes + reads) received over WebSocket.
+   * Components fall back to this when the event payload doesn't include file data.
+   */
+  const fileTrackingEvents = ref<Map<string, { file_changes?: any[]; read_files?: any[] }>>(new Map());
+
   // --- streaming block state (T076) ---
   const thinkingBlocks = ref<ThinkingBlockWsMessage["data"][]>([]);
   const toolUseBlocks = ref<ToolUseBlockWsMessage["data"][]>([]);
@@ -337,6 +348,14 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
 
   const totalTokensToday = computed(() =>
     repos.value.reduce((s, r) => s + r.tokens_today, 0),
+  );
+
+  /**
+   * Running ADW workflows — agents with status 'executing' that have an adw_id.
+   * Used by AppHeader to show the ADWS badge count.
+   */
+  const runningAdws = computed(() =>
+    agents.value.filter((a) => a.status === 'executing' && a.adw_id),
   );
 
   /**
@@ -420,6 +439,16 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
 
   function toggleCommandInput() {
     commandInputVisible.value = !commandInputVisible.value;
+  }
+
+  /** Set the center column view mode explicitly. */
+  function setViewMode(mode: 'logs' | 'adws') {
+    viewMode.value = mode;
+  }
+
+  /** Toggle the center column between 'logs' and 'adws'. */
+  function toggleViewMode() {
+    viewMode.value = viewMode.value === 'logs' ? 'adws' : 'logs';
   }
 
   function upsertRun(run: RunSummary) {
@@ -614,6 +643,10 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     websocketEventCount,
     /** Command input visibility toggle */
     commandInputVisible,
+    /** Current view mode for center column: 'logs' | 'adws' */
+    viewMode,
+    /** Map of event ID → file tracking data from WebSocket (real-time fallback) */
+    fileTrackingEvents,
 
     // --- STREAMING BLOCK STATE (T076) ---
     /** Thinking blocks from streaming responses */
@@ -642,8 +675,12 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     stats,
     /** Total tokens used across all repos today */
     totalTokensToday,
+    /** Running ADW agents (executing + have adw_id) */
+    runningAdws,
     /** Get all streaming blocks for a given adw_id in timestamp order */
     activeBlocksByAdwId,
+    /** Check if an agent is currently pulsing (from useAgentPulse) */
+    isAgentPulsing: pulse.isAgentPulsing,
 
     // --- PUBLIC ACTIONS ---
     /** Initialize store: load initial data and establish WebSocket */
@@ -658,6 +695,18 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     clearEventStream,
     /** Toggle command input visibility */
     toggleCommandInput,
+    /** Set the center column view mode */
+    setViewMode,
+    /** Toggle the center column between 'logs' and 'adws' */
+    toggleViewMode,
+    /** Add a hook event to the event stream */
+    addHookEvent,
+    /** Hydrate event stream from an initial batch of events */
+    hydrateFromInitial,
+    /** Upsert a run summary into the agents array */
+    upsertRun,
+    /** Upsert a repo status into the repos array */
+    upsertRepo,
 
     // --- STREAMING BLOCK ACTIONS (T076) ---
     /** Add a thinking block to the store */

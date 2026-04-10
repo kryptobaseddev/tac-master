@@ -162,6 +162,15 @@ export interface AgentLogMetadata {
   total_files_modified?: number
   total_files_read?: number
   generated_at?: string
+  // Streaming block payload fields (thinking, tool_use, text blocks)
+  tokens?: number
+  input_tokens?: number
+  output_tokens?: number
+  tool_name?: string
+  tool_input?: Record<string, any>
+  text?: string
+  // Allow other payload fields from hook events
+  [key: string]: any
 }
 
 export interface AgentLog {
