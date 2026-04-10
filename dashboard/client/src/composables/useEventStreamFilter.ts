@@ -39,10 +39,14 @@ export interface AgentFilter {
 export function useEventStreamFilter(getEvents: () => EventStreamEntry[]) {
   // Filter state
   const currentFilter = ref<string>('all')
+  // Active tab: 'combined' | 'errors' | 'performance'
+  const activeTab = ref<string>('combined')
   const activeAgentFilters = ref<Set<string>>(new Set())
   const activeCategoryFilters = ref<Set<string>>(new Set())
   const activeToolFilters = ref<Set<string>>(new Set())
   const activeQuickFilters = ref<Set<string>>(new Set())
+  // Level filters: INFO, WARNING, ERROR (if any active, show only those levels)
+  const activeLevelFilters = ref<Set<string>>(new Set())
   const searchQuery = ref<string>('')
   const autoScroll = ref<boolean>(true)
 
@@ -110,6 +114,22 @@ export function useEventStreamFilter(getEvents: () => EventStreamEntry[]) {
   const filteredEvents = computed(() => {
     let filtered = getEvents()
 
+    // Apply tab-based pre-filtering
+    if (activeTab.value === 'errors') {
+      // Errors tab: only WARNING and ERROR level events
+      filtered = filtered.filter(event =>
+        event.level === 'ERROR' || event.level === 'WARNING'
+      )
+    } else if (activeTab.value === 'performance') {
+      // Performance tab: only TOOL category events
+      filtered = filtered.filter(event => {
+        const eventType = event.eventType?.toLowerCase()
+        const isToolCategory = eventType === 'tool_use' || eventType === 'tooluseblock'
+        const isToolEntry = event.sourceType === 'tool_use_block'
+        return isToolCategory || isToolEntry
+      })
+    }
+
     // Apply agent filters
     if (activeAgentFilters.value.size > 0) {
       filtered = filtered.filter(event =>
@@ -124,12 +144,15 @@ export function useEventStreamFilter(getEvents: () => EventStreamEntry[]) {
 
         if (activeCategoryFilters.value.has('TOOL')) {
           if (eventType === 'tool_use' || eventType === 'tooluseblock') return true
+          if (event.sourceType === 'tool_use_block') return true
         }
         if (activeCategoryFilters.value.has('RESPONSE')) {
           if (eventType === 'text' || eventType === 'textblock') return true
+          if (event.sourceType === 'thinking_block') return false // thinking is separate
         }
         if (activeCategoryFilters.value.has('THINKING')) {
           if (eventType === 'thinking' || eventType === 'thinkingblock') return true
+          if (event.sourceType === 'thinking_block') return true
         }
         if (activeCategoryFilters.value.has('HOOK')) {
           if (event.eventCategory === 'hook') return true
@@ -147,7 +170,14 @@ export function useEventStreamFilter(getEvents: () => EventStreamEntry[]) {
       })
     }
 
-    // Apply quick filters (by log level)
+    // Apply level filters (INFO, WARNING, ERROR) — additive with quick filters
+    if (activeLevelFilters.value.size > 0) {
+      filtered = filtered.filter(event =>
+        activeLevelFilters.value.has(event.level)
+      )
+    }
+
+    // Apply quick filters (by log level) — legacy path, combined with level filters
     if (activeQuickFilters.value.size > 0) {
       filtered = filtered.filter(event =>
         activeQuickFilters.value.has(event.level)
@@ -309,29 +339,61 @@ export function useEventStreamFilter(getEvents: () => EventStreamEntry[]) {
   }
 
   /**
+   * Set the active tab (combined | errors | performance)
+   */
+  const setTab = (tab: string) => {
+    activeTab.value = tab
+  }
+
+  /**
+   * Check if a level filter is active
+   */
+  const levelFilterActive = (value: string): boolean => {
+    return activeLevelFilters.value.has(value)
+  }
+
+  /**
+   * Toggle a level filter (INFO, WARNING, ERROR) on/off
+   */
+  const toggleLevelFilter = (value: string) => {
+    if (activeLevelFilters.value.has(value)) {
+      activeLevelFilters.value.delete(value)
+    } else {
+      activeLevelFilters.value.add(value)
+    }
+    // Force reactivity
+    activeLevelFilters.value = new Set(activeLevelFilters.value)
+  }
+
+  /**
    * Clear all active filters and search
    */
   const clearAllFilters = () => {
     currentFilter.value = 'all'
+    activeTab.value = 'combined'
     activeAgentFilters.value.clear()
     activeCategoryFilters.value.clear()
     activeToolFilters.value.clear()
     activeQuickFilters.value.clear()
+    activeLevelFilters.value.clear()
     searchQuery.value = ''
     // Force reactivity
     activeAgentFilters.value = new Set()
     activeCategoryFilters.value = new Set()
     activeToolFilters.value = new Set()
     activeQuickFilters.value = new Set()
+    activeLevelFilters.value = new Set()
   }
 
   return {
     // State
     currentFilter,
+    activeTab,
     activeAgentFilters,
     activeCategoryFilters,
     activeToolFilters,
     activeQuickFilters,
+    activeLevelFilters,
     searchQuery,
     autoScroll,
 
@@ -347,14 +409,17 @@ export function useEventStreamFilter(getEvents: () => EventStreamEntry[]) {
 
     // Handlers
     setFilter,
+    setTab,
     quickFilterActive,
     agentFilterActive,
     categoryFilterActive,
     toolFilterActive,
+    levelFilterActive,
     toggleQuickFilter,
     toggleAgentFilter,
     toggleCategoryFilter,
     toggleToolFilter,
+    toggleLevelFilter,
     toggleAutoScroll,
     clearAllFilters
   }

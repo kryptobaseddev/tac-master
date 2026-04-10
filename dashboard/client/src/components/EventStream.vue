@@ -12,10 +12,14 @@
       :active-agent-filters="activeAgentFilters"
       :active-category-filters="activeCategoryFilters"
       :active-tool-filters="activeToolFilters"
+      :active-level-filters="activeLevelFilters"
+      :active-tab="activeTab"
       @quick-filter-toggle="toggleQuickFilter"
       @agent-filter-toggle="toggleAgentFilter"
       @category-filter-toggle="toggleCategoryFilter"
       @tool-filter-toggle="toggleToolFilter"
+      @level-filter-toggle="toggleLevelFilter"
+      @tab-change="setTab"
       @update:search-query="searchQuery = $event"
       @auto-scroll-toggle="store.toggleAutoScroll"
       @clear-all="store.clearEventStream"
@@ -23,7 +27,7 @@
 
     <div class="event-stream-content" ref="streamRef">
       <!-- Empty State -->
-      <div v-if="filteredEvents.length === 0" class="empty-state">
+      <div v-if="combinedFilteredEntries.length === 0" class="empty-state">
         <div class="empty-icon">
           <svg
             width="98"
@@ -57,15 +61,39 @@
         </p>
       </div>
 
-      <!-- Event Items -->
+      <!-- Event Items (combined: hook events + streaming blocks) -->
       <div v-else class="event-items">
-        <template v-for="event in filteredEvents" :key="event.id">
-          <component
-            v-if="getEventComponent(event)"
-            :is="getEventComponent(event)"
-            :event="getEventData(event)"
-            :line-number="event.lineNumber"
+        <template v-for="entry in combinedFilteredEntries" :key="entry.id">
+          <!-- Streaming: ThinkingBlock -->
+          <ThinkingBlockRow
+            v-if="entry.renderType === 'thinking_block'"
+            :event="(entry.data as any)"
+            :line-number="entry.lineNumber"
           />
+
+          <!-- Streaming: TextBlock -->
+          <TextBlockRow
+            v-else-if="entry.renderType === 'text_block'"
+            :event="(entry.data as any)"
+            :line-number="entry.lineNumber"
+          />
+
+          <!-- Streaming: ToolUseBlock (reuse AgentToolUseBlockRow with adapted data) -->
+          <AgentToolUseBlockRow
+            v-else-if="entry.renderType === 'tool_use_block'"
+            :event="(entry.data as any)"
+            :line-number="entry.lineNumber"
+          />
+
+          <!-- Hook events: use existing component routing -->
+          <template v-else-if="entry.renderType === 'event_stream' && entry.eventStreamEntry">
+            <component
+              v-if="getEventComponent(entry.eventStreamEntry)"
+              :is="getEventComponent(entry.eventStreamEntry)"
+              :event="getEventData(entry.eventStreamEntry)"
+              :line-number="entry.eventStreamEntry.lineNumber"
+            />
+          </template>
         </template>
       </div>
 
@@ -89,6 +117,8 @@ import { useEventStreamFilter } from "../composables/useEventStreamFilter";
 import FilterControls from "./FilterControls.vue";
 import AgentLogRow from "./event-rows/AgentLogRow.vue";
 import AgentToolUseBlockRow from "./event-rows/AgentToolUseBlockRow.vue";
+import ThinkingBlockRow from "./event-rows/ThinkingBlockRow.vue";
+import TextBlockRow from "./event-rows/TextBlockRow.vue";
 import type { EventStreamEntry } from "../types";
 
 // Store
@@ -102,34 +132,203 @@ const events: ComputedRef<EventStreamEntry[]> = computed(
 
 // Use filter composable (without autoScroll, which is now in store)
 const {
+  activeTab,
   activeAgentFilters,
   activeCategoryFilters,
   activeToolFilters,
   activeQuickFilters,
+  activeLevelFilters,
   searchQuery,
   categoryFilters,
   quickFilters,
   agentFilters,
   toolFilters,
   filteredEvents,
+  setTab,
   toggleQuickFilter,
   toggleAgentFilter,
   toggleCategoryFilter,
   toggleToolFilter,
+  toggleLevelFilter,
   clearAllFilters,
 } = useEventStreamFilter(() => events.value);
 
 // Get autoScroll from store (shared with OrchestratorChat)
 const autoScroll = computed(() => store.autoScroll);
 
+// ---------------------------------------------------------------------------
+// Combined stream: merge hook events + streaming blocks sorted by timestamp
+// ---------------------------------------------------------------------------
+
+interface CombinedEntry {
+  id: string
+  lineNumber: number
+  timestamp: number
+  renderType: 'event_stream' | 'thinking_block' | 'text_block' | 'tool_use_block'
+  // For event_stream type
+  eventStreamEntry?: EventStreamEntry
+  // For streaming block types
+  data?: Record<string, unknown>
+}
+
+/**
+ * Build a unified timeline of hook events and streaming blocks.
+ * Thinking blocks render as collapsible cyan bubbles.
+ * Text blocks render as formatted markdown.
+ * Tool use blocks reuse AgentToolUseBlockRow with adapted data.
+ */
+const combinedEntries = computed<CombinedEntry[]>(() => {
+  const entries: CombinedEntry[] = []
+
+  // 1. Hook events from filteredEvents (already filtered by agent/category/search)
+  filteredEvents.value.forEach((entry) => {
+    // Skip entries that render null
+    if (!getEventComponent(entry)) return
+    const ts = entry.timestamp instanceof Date
+      ? entry.timestamp.getTime()
+      : new Date(entry.timestamp as string).getTime()
+    entries.push({
+      id: entry.id,
+      lineNumber: entry.lineNumber,
+      timestamp: ts,
+      renderType: 'event_stream',
+      eventStreamEntry: entry,
+    })
+  })
+
+  // 2. Thinking blocks — only if not filtered out by tab or category
+  const showThinking = shouldShowBlockType('thinking')
+  if (showThinking) {
+    store.thinkingBlocks.forEach((block) => {
+      if (!matchesSearch(block.thinking)) return
+      if (!matchesLevelFilters('INFO')) return
+      entries.push({
+        id: `thinking-${block.id}`,
+        lineNumber: 0, // will be reassigned
+        timestamp: block.timestamp,
+        renderType: 'thinking_block',
+        data: block as unknown as Record<string, unknown>,
+      })
+    })
+  }
+
+  // 3. Text blocks — only if not filtered out by tab or category
+  const showText = shouldShowBlockType('text')
+  if (showText) {
+    store.textBlocks.forEach((block) => {
+      if (!matchesSearch(block.text)) return
+      if (!matchesLevelFilters('INFO')) return
+      entries.push({
+        id: `text-${block.id}`,
+        lineNumber: 0,
+        timestamp: block.timestamp,
+        renderType: 'text_block',
+        data: block as unknown as Record<string, unknown>,
+      })
+    })
+  }
+
+  // 4. Tool use blocks — only if not filtered out by tab or category
+  const showToolUse = shouldShowBlockType('tool_use')
+  if (showToolUse) {
+    store.toolUseBlocks.forEach((block) => {
+      if (!matchesSearch(block.tool_name)) return
+      if (!matchesLevelFilters('INFO')) return
+      // Adapt to AgentLog-like shape for AgentToolUseBlockRow
+      entries.push({
+        id: `tooluse-${block.id}`,
+        lineNumber: 0,
+        timestamp: block.timestamp,
+        renderType: 'tool_use_block',
+        data: {
+          id: block.id,
+          agent_id: block.orchestrator_agent_id,
+          agent_name: block.orchestrator_agent_id,
+          session_id: null,
+          task_slug: null,
+          entry_index: null,
+          event_category: 'tool',
+          event_type: 'tool_use',
+          content: `Tool: ${block.tool_name}`,
+          payload: {
+            tool_name: block.tool_name,
+            tool_input: block.tool_input,
+          },
+          summary: `Tool: ${block.tool_name}`,
+          timestamp: new Date(block.timestamp).toISOString(),
+        } as unknown as Record<string, unknown>,
+      })
+    })
+  }
+
+  // Sort by timestamp ascending and reassign line numbers
+  entries.sort((a, b) => a.timestamp - b.timestamp)
+  entries.forEach((e, i) => {
+    e.lineNumber = i + 1
+  })
+
+  return entries
+})
+
+/**
+ * Apply additional tab/level filter pass to the combined entries.
+ * (Streaming blocks already checked above, hook events go through filteredEvents.)
+ */
+const combinedFilteredEntries = computed<CombinedEntry[]>(() => {
+  return combinedEntries.value
+})
+
+/**
+ * Determine if a given block type should be shown based on tab and category filters.
+ */
+function shouldShowBlockType(blockType: 'thinking' | 'text' | 'tool_use'): boolean {
+  // Tab-based exclusion
+  if (activeTab.value === 'errors') return false // Streaming blocks are not error events
+  if (activeTab.value === 'performance') {
+    return blockType === 'tool_use'
+  }
+
+  // Category filter exclusion
+  if (activeCategoryFilters.value.size > 0) {
+    if (blockType === 'thinking' && !activeCategoryFilters.value.has('THINKING')) return false
+    if (blockType === 'text' && !activeCategoryFilters.value.has('RESPONSE')) return false
+    if (blockType === 'tool_use' && !activeCategoryFilters.value.has('TOOL')) return false
+  }
+
+  return true
+}
+
+/**
+ * Check if content matches the current search query (regex or plain).
+ */
+function matchesSearch(content: string): boolean {
+  if (!searchQuery.value.trim()) return true
+  const query = searchQuery.value.toLowerCase()
+  try {
+    const regex = new RegExp(query, 'i')
+    return regex.test(content)
+  } catch {
+    return content.toLowerCase().includes(query)
+  }
+}
+
+/**
+ * Check if a given level passes the active level filters.
+ * Returns true when no level filters are set.
+ */
+function matchesLevelFilters(level: string): boolean {
+  if (activeLevelFilters.value.size === 0) return true
+  return activeLevelFilters.value.has(level)
+}
+
 // Get appropriate component for event type
 function getEventComponent(event: EventStreamEntry) {
   // Check for special block types first (for the orchestrator, no need to display this here its in the chat)
   if (event.sourceType === "thinking_block") {
-    // return ThinkingBlockRow;
+    // Skip — thinking blocks from eventStreamEntries rendered via streaming path
     return null;
   }
-  // Skip tool_use_block - orchestrator tools only show in chat
+  // Skip tool_use_block from eventStreamEntries — rendered via streaming path
   if (event.sourceType === "tool_use_block") {
     return null;
   }
@@ -173,7 +372,7 @@ function getEventData(event: EventStreamEntry) {
       agent_id: event.metadata?.agent_id,
       orchestrator_agent_id: event.metadata?.orchestrator_agent_id,
       timestamp: event.timestamp,
-      created_at: event.timestamp, // Provide both for compatibility
+      created_at: event.timestamp,
       id: event.id,
       metadata: event.metadata,
     };
@@ -202,7 +401,7 @@ const bottomRef = ref<HTMLElement>();
 
 // Auto-scroll to bottom when new events arrive or filters change
 watch(
-  () => filteredEvents.value.length,
+  () => combinedFilteredEntries.value.length,
   async () => {
     if (autoScroll.value) {
       await nextTick();
@@ -210,15 +409,6 @@ watch(
     }
   }
 );
-
-const formatTime = (timestamp: string | Date) => {
-  const date = typeof timestamp === "string" ? new Date(timestamp) : timestamp;
-  return date.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-};
 
 // Load event history on mount
 onMounted(async () => {
