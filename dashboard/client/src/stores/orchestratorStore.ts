@@ -43,7 +43,21 @@ import type {
   TacWsMessage,
   ThinkingBlockWsMessage,
   ToolUseBlockWsMessage,
+  AdwSummary,
+  CostMetrics,
 } from "../types";
+
+// Define AdwEvent based on the structure inside AdwSummary.events_by_step
+type AdwEvent = {
+  id: string;
+  adw_id: string;
+  adw_step: string | null;
+  event_category: string;
+  event_type: string;
+  summary: string | null;
+  payload: Record<string, unknown> | null;
+  timestamp: string;
+};
 
 const MAX_EVENT_STREAM_SIZE = 2000;
 const MAX_STREAMING_BLOCK_SIZE = 500;
@@ -272,8 +286,20 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   const commandInputVisible = ref(false);
 
   // --- view mode state (T118) ---
-  /** Current view mode for the center column: 'logs' or 'adws' */
-  const viewMode = ref<'logs' | 'adws'>('logs');
+  /** Current view mode for the center column: 'dashboard' or 'swimlanes' (T125) */
+  const viewMode = ref<'dashboard' | 'swimlanes'>('dashboard');
+
+  // --- command palette state (T125) ---
+  /** Command palette visibility toggle */
+  const commandPaletteVisible = ref(false);
+
+  // --- observability state (T125) ---
+  /** Array of ADW summaries (swimlane workflow runs) */
+  const adws = ref<AdwSummary[]>([]);
+  /** Map of adw_id -> adw_step -> AdwEvent[] for swimlane event grouping */
+  const allAdwEventsByStep = ref<Record<string, Record<string, AdwEvent[]>>>({});
+  /** Loading state for fetchAdws() */
+  const adwsLoading = ref(false);
 
   // --- file tracking events (T118) ---
   /**
@@ -349,6 +375,30 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   const totalTokensToday = computed(() =>
     repos.value.reduce((s, r) => s + r.tokens_today, 0),
   );
+
+  /**
+   * Cost metrics computed from orchestratorAgent and session duration.
+   * Calculates burn rate per hour based on total cost and elapsed time.
+   */
+  const costMetrics = computed<CostMetrics>(() => {
+    const inputTokens = orchestratorAgent.value.input_tokens ?? 0;
+    const outputTokens = orchestratorAgent.value.output_tokens ?? 0;
+    const totalCost = orchestratorAgent.value.total_cost ?? 0;
+
+    // Calculate burn rate per hour
+    const createdAt = orchestratorAgent.value.created_at ? new Date(orchestratorAgent.value.created_at).getTime() : Date.now();
+    const now = Date.now();
+    const elapsedHours = (now - createdAt) / (1000 * 60 * 60);
+    const burnRatePerHour = elapsedHours > 0 ? totalCost / elapsedHours : 0;
+
+    return {
+      sessionCost: totalCost,
+      inputTokens,
+      outputTokens,
+      totalCost,
+      burnRatePerHour,
+    };
+  });
 
   /**
    * Running ADW workflows — agents with status 'executing' that have an adw_id.
@@ -442,13 +492,28 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   }
 
   /** Set the center column view mode explicitly. */
-  function setViewMode(mode: 'logs' | 'adws') {
+  function setViewMode(mode: 'dashboard' | 'swimlanes') {
     viewMode.value = mode;
   }
 
-  /** Toggle the center column between 'logs' and 'adws'. */
+  /** Toggle the center column between 'dashboard' and 'swimlanes'. */
   function toggleViewMode() {
-    viewMode.value = viewMode.value === 'logs' ? 'adws' : 'logs';
+    viewMode.value = viewMode.value === 'dashboard' ? 'swimlanes' : 'dashboard';
+  }
+
+  /** Show the command palette. */
+  function showCommandPalette() {
+    commandPaletteVisible.value = true;
+  }
+
+  /** Hide the command palette. */
+  function hideCommandPalette() {
+    commandPaletteVisible.value = false;
+  }
+
+  /** Toggle the command palette visibility. */
+  function toggleCommandPalette() {
+    commandPaletteVisible.value = !commandPaletteVisible.value;
   }
 
   function upsertRun(run: RunSummary) {
@@ -574,6 +639,40 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     }
   }
 
+  /**
+   * Fetch ADW summaries and events from /api/adws endpoint.
+   * Populates adws and allAdwEventsByStep state.
+   */
+  async function fetchAdws() {
+    adwsLoading.value = true;
+    try {
+      const resp = await fetch("/api/adws");
+      if (!resp.ok) {
+        console.error(`[store] fetchAdws failed with status ${resp.status}`);
+        adws.value = [];
+        allAdwEventsByStep.value = {};
+        return;
+      }
+      const data = await resp.json() as { adws?: AdwSummary[] };
+      adws.value = data.adws || [];
+
+      // Reconstruct allAdwEventsByStep from adws[].events_by_step
+      const eventsByStep: Record<string, Record<string, AdwEvent[]>> = {};
+      for (const adw of adws.value) {
+        if (adw.id && adw.events_by_step) {
+          eventsByStep[adw.id] = adw.events_by_step;
+        }
+      }
+      allAdwEventsByStep.value = eventsByStep;
+    } catch (e) {
+      console.error("[store] fetchAdws error:", e);
+      adws.value = [];
+      allAdwEventsByStep.value = {};
+    } finally {
+      adwsLoading.value = false;
+    }
+  }
+
   // --- WebSocket ---
 
   function connectWebSocket() {
@@ -643,8 +742,16 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     websocketEventCount,
     /** Command input visibility toggle */
     commandInputVisible,
-    /** Current view mode for center column: 'logs' | 'adws' */
+    /** Current view mode for center column: 'dashboard' | 'swimlanes' */
     viewMode,
+    /** Command palette visibility toggle */
+    commandPaletteVisible,
+    /** Array of ADW summaries (swimlane workflow runs) */
+    adws,
+    /** Map of adw_id -> adw_step -> AdwEvent[] for swimlane event grouping */
+    allAdwEventsByStep,
+    /** Loading state for fetchAdws() */
+    adwsLoading,
     /** Map of event ID → file tracking data from WebSocket (real-time fallback) */
     fileTrackingEvents,
 
@@ -677,6 +784,8 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     totalTokensToday,
     /** Running ADW agents (executing + have adw_id) */
     runningAdws,
+    /** Cost metrics derived from orchestratorAgent (T125) */
+    costMetrics,
     /** Get all streaming blocks for a given adw_id in timestamp order */
     activeBlocksByAdwId,
     /** Check if an agent is currently pulsing (from useAgentPulse) */
@@ -697,8 +806,16 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     toggleCommandInput,
     /** Set the center column view mode */
     setViewMode,
-    /** Toggle the center column between 'logs' and 'adws' */
+    /** Toggle the center column between 'dashboard' and 'swimlanes' */
     toggleViewMode,
+    /** Show the command palette */
+    showCommandPalette,
+    /** Hide the command palette */
+    hideCommandPalette,
+    /** Toggle the command palette visibility */
+    toggleCommandPalette,
+    /** Fetch ADW summaries and events from /api/adws */
+    fetchAdws,
     /** Add a hook event to the event stream */
     addHookEvent,
     /** Hydrate event stream from an initial batch of events */
