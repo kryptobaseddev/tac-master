@@ -3,7 +3,7 @@
     <div class="agent-list-header">
       <h3>AGENTS</h3>
       <div class="header-right">
-        <div class="total-count">{{ agents.length }} Total</div>
+        <div class="total-count">{{ agents.length + 1 }} Total</div>
         <button
           class="collapse-btn"
           @click="toggleCollapse"
@@ -16,6 +16,20 @@
 
     <!-- Compact Agent View (when collapsed) -->
     <div class="compact-agent-list" v-show="isCollapsed">
+      <!-- Orchestrator agent compact view -->
+      <div
+        v-if="store.orchestratorAgent"
+        :key="`orchestrator-${store.orchestratorAgent.id}`"
+        class="compact-agent-item orchestrator-compact"
+        :class="{ active: store.orchestratorAgent.id === selectedAgentId }"
+        @click="onSelectAgent(store.orchestratorAgent.id)"
+        :title="store.orchestratorAgent.id"
+      >
+        <span class="compact-agent-dot" style="background: #8b5cf6;"></span>
+        <span class="compact-agent-letter">🧠</span>
+      </div>
+
+      <!-- Worker agents compact view -->
       <div
         v-for="agent in agents"
         :key="agent.id"
@@ -42,109 +56,181 @@
     </div>
 
     <div class="agent-list-content" v-show="!isCollapsed">
-      <!-- Agent Items -->
-      <div class="agent-items">
+      <!-- Orchestrator section at top -->
+      <div class="hierarchy-section">
+        <div class="hierarchy-label">ORCHESTRATOR</div>
         <div
-          v-for="agent in agents"
-          :key="agent.id"
-          class="agent-card"
-          :class="{
-            active: agent.id === selectedAgentId,
-            'agent-pulsing': store.isAgentPulsing(agent.id)
-          }"
-          :style="store.isAgentPulsing(agent.id) ? {
-            '--pulse-color': getPulseColorValue(agent)
-          } : {}"
-          @click="onSelectAgent(agent.id)"
+          v-if="store.orchestratorAgent"
+          class="orchestrator-card"
+          :class="{ active: store.orchestratorAgent.id === selectedAgentId }"
+          @click="onSelectAgent(store.orchestratorAgent.id)"
         >
-          <div class="agent-card-header">
-            <div class="agent-name-row">
-              <span
-                class="agent-name"
-                :style="{ borderColor: getAgentColor(agent) }"
-                >{{ agent.name }}</span
-              >
-              <!-- T033: Role badge inferred from adw_id + workflow -->
-              <RoleBadge :role="inferRole(agent.adw_id, agent.adw_step)" />
+          <div class="orchestrator-header">
+            <div class="orchestrator-title">
+              <span class="orchestrator-icon">🧠</span>
+              <span class="orchestrator-name">{{ store.orchestratorAgent.id }}</span>
             </div>
             <div
-              class="agent-status-badge"
-              :class="getStatusClass(agent.status)"
+              class="orchestrator-status-badge"
+              :class="`status-${store.orchestratorAgent.status || 'idle'}`"
             >
-              {{ getStatusLabel(agent.status) }}
+              {{ getStatusLabel(store.orchestratorAgent.status) }}
             </div>
           </div>
 
-          <!-- Template Badge -->
-          <div v-if="agent.metadata?.template_name" class="template-badge">
-            <span class="template-icon">📋</span>
-            <span class="template-text"
-              >Template: {{ agent.metadata.template_name }}</span
-            >
+          <!-- Session info -->
+          <div class="orchestrator-info">
+            <div class="info-row">
+              <span class="info-label">Session:</span>
+              <span class="info-value">{{ store.orchestratorAgent.session_id || "—" }}</span>
+            </div>
           </div>
 
-          <div class="agent-task">{{ getTaskDescription(agent) }}</div>
-
-          <!-- Context Window -->
+          <!-- Context Window for Orchestrator -->
           <div class="context-window">
             <div class="context-header">
               <span class="context-label">Context Window</span>
               <span class="context-values"
-                >{{ formatTokens(getTotalTokens(agent)) }} / 200k</span
+                >{{ formatTokens(getTotalOrchestratorTokens()) }} / 200k</span
               >
             </div>
             <div class="context-bar-container">
               <div
-                class="context-bar-fill"
-                :style="{ width: getContextPercentage(agent) + '%' }"
+                class="context-bar-fill orchestrator-fill"
+                :style="{ width: getOrchestratorContextPercentage() + '%' }"
               ></div>
             </div>
           </div>
 
-          <!-- Log Counters Row -->
-          <div class="agent-log-counters">
-            <div
-              class="log-counter counter-response"
-              :title="`${getAgentLogCount(agent, 'RESPONSE')} responses`"
-            >
-              <span class="counter-emoji">💬</span>
-              <span class="counter-value">{{
-                getAgentLogCount(agent, "RESPONSE")
-              }}</span>
+          <!-- Cost roll-up footer -->
+          <div class="orchestrator-footer">
+            <div class="footer-row">
+              <span class="footer-label">Orchestrator Cost:</span>
+              <span class="footer-value">${{ store.orchestratorAgent.total_cost.toFixed(3) }}</span>
             </div>
-            <div
-              class="log-counter counter-tool"
-              :title="`${getAgentLogCount(agent, 'TOOL')} tools`"
-            >
-              <span class="counter-emoji">🛠️</span>
-              <span class="counter-value">{{
-                getAgentLogCount(agent, "TOOL")
-              }}</span>
+            <div class="footer-row">
+              <span class="footer-label">Workers Cost:</span>
+              <span class="footer-value">${{ calculateWorkersCost().toFixed(3) }}</span>
             </div>
-            <div
-              class="log-counter counter-hook"
-              :title="`${getAgentLogCount(agent, 'HOOK')} hooks`"
-            >
-              <span class="counter-emoji">🪝</span>
-              <span class="counter-value">{{
-                getAgentLogCount(agent, "HOOK")
-              }}</span>
-            </div>
-            <div
-              class="log-counter counter-thinking"
-              :title="`${getAgentLogCount(agent, 'THINKING')} thinking`"
-            >
-              <span class="counter-emoji">🧠</span>
-              <span class="counter-value">{{
-                getAgentLogCount(agent, "THINKING")
-              }}</span>
+            <div class="footer-row total">
+              <span class="footer-label">Total Cost:</span>
+              <span class="footer-value">${{ calculateTotalCost().toFixed(3) }}</span>
             </div>
           </div>
+        </div>
 
-          <!-- Model & Cost Row -->
-          <div class="agent-card-footer">
-            <div class="agent-model">{{ formatModel(agent.model) }}</div>
-            <div class="agent-cost">${{ agent.total_cost.toFixed(3) }}</div>
+        <!-- Placeholder if no orchestrator agent -->
+        <div v-else class="orchestrator-placeholder">
+          <span class="placeholder-text">No orchestrator agent</span>
+        </div>
+      </div>
+
+      <!-- Workers section -->
+      <div class="hierarchy-section">
+        <div class="hierarchy-label">WORKERS</div>
+        <div class="agent-items">
+          <div
+            v-for="agent in agents"
+            :key="agent.id"
+            class="agent-card"
+            :class="{
+              active: agent.id === selectedAgentId,
+              'agent-pulsing': store.isAgentPulsing(agent.id)
+            }"
+            :style="store.isAgentPulsing(agent.id) ? {
+              '--pulse-color': getPulseColorValue(agent)
+            } : {}"
+            @click="onSelectAgent(agent.id)"
+          >
+            <div class="agent-card-header">
+              <div class="agent-name-row">
+                <span
+                  class="agent-name"
+                  :style="{ borderColor: getAgentColor(agent) }"
+                  >{{ agent.name }}</span
+                >
+                <!-- T033: Role badge inferred from adw_id + workflow -->
+                <RoleBadge :role="inferRole(agent.adw_id, agent.adw_step)" />
+              </div>
+              <div
+                class="agent-status-badge"
+                :class="getStatusClass(agent.status)"
+              >
+                {{ getStatusLabel(agent.status) }}
+              </div>
+            </div>
+
+            <!-- Template Badge -->
+            <div v-if="agent.metadata?.template_name" class="template-badge">
+              <span class="template-icon">📋</span>
+              <span class="template-text"
+                >Template: {{ agent.metadata.template_name }}</span
+              >
+            </div>
+
+            <div class="agent-task">{{ getTaskDescription(agent) }}</div>
+
+            <!-- Context Window -->
+            <div class="context-window">
+              <div class="context-header">
+                <span class="context-label">Context Window</span>
+                <span class="context-values"
+                  >{{ formatTokens(getTotalTokens(agent)) }} / 200k</span
+                >
+              </div>
+              <div class="context-bar-container">
+                <div
+                  class="context-bar-fill"
+                  :style="{ width: getContextPercentage(agent) + '%' }"
+                ></div>
+              </div>
+            </div>
+
+            <!-- Log Counters Row -->
+            <div class="agent-log-counters">
+              <div
+                class="log-counter counter-response"
+                :title="`${getAgentLogCount(agent, 'RESPONSE')} responses`"
+              >
+                <span class="counter-emoji">💬</span>
+                <span class="counter-value">{{
+                  getAgentLogCount(agent, "RESPONSE")
+                }}</span>
+              </div>
+              <div
+                class="log-counter counter-tool"
+                :title="`${getAgentLogCount(agent, 'TOOL')} tools`"
+              >
+                <span class="counter-emoji">🛠️</span>
+                <span class="counter-value">{{
+                  getAgentLogCount(agent, "TOOL")
+                }}</span>
+              </div>
+              <div
+                class="log-counter counter-hook"
+                :title="`${getAgentLogCount(agent, 'HOOK')} hooks`"
+              >
+                <span class="counter-emoji">🪝</span>
+                <span class="counter-value">{{
+                  getAgentLogCount(agent, "HOOK")
+                }}</span>
+              </div>
+              <div
+                class="log-counter counter-thinking"
+                :title="`${getAgentLogCount(agent, 'THINKING')} thinking`"
+              >
+                <span class="counter-emoji">🧠</span>
+                <span class="counter-value">{{
+                  getAgentLogCount(agent, "THINKING")
+                }}</span>
+              </div>
+            </div>
+
+            <!-- Model & Cost Row -->
+            <div class="agent-card-footer">
+              <div class="agent-model">{{ formatModel(agent.model) }}</div>
+              <div class="agent-cost">${{ agent.total_cost.toFixed(3) }}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -361,6 +447,37 @@ const getPulseColorValue = (agent: Agent): string => {
   // Fallback to a neutral gray
   return "107, 114, 128";
 };
+
+// T129: Orchestrator-specific methods for hierarchy display
+
+/**
+ * Get total tokens for orchestrator agent
+ */
+const getTotalOrchestratorTokens = (): number => {
+  return (store.orchestratorAgent.input_tokens || 0) + (store.orchestratorAgent.output_tokens || 0);
+};
+
+/**
+ * Get context percentage for orchestrator agent (200k max)
+ */
+const getOrchestratorContextPercentage = (): number => {
+  const total = getTotalOrchestratorTokens();
+  return Math.min((total / MAX_TOKENS) * 100, 100);
+};
+
+/**
+ * Calculate total cost of all worker agents
+ */
+const calculateWorkersCost = (): number => {
+  return agents.value.reduce((sum, agent) => sum + agent.total_cost, 0);
+};
+
+/**
+ * Calculate total cost: orchestrator + all workers
+ */
+const calculateTotalCost = (): number => {
+  return (store.orchestratorAgent.total_cost || 0) + calculateWorkersCost();
+};
 </script>
 
 <style scoped>
@@ -496,6 +613,219 @@ const getPulseColorValue = (agent: Agent): string => {
   flex: 1;
   overflow-y: auto;
   padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Hierarchy sections (T129) */
+.hierarchy-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.hierarchy-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: #6b7280;
+  text-transform: uppercase;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-left: 2px solid rgba(139, 92, 246, 0.3);
+}
+
+/* Orchestrator Card (T129) */
+.orchestrator-card {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%);
+  border: 1.5px solid rgba(139, 92, 246, 0.4);
+  border-radius: 6px;
+  padding: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.orchestrator-card:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(59, 130, 246, 0.1) 100%);
+  transform: translateY(-1px);
+  border-color: rgba(139, 92, 246, 0.6);
+}
+
+.orchestrator-card.active {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(59, 130, 246, 0.15) 100%);
+  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.6);
+}
+
+.orchestrator-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.orchestrator-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.orchestrator-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.orchestrator-name {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #e5e7eb;
+}
+
+.orchestrator-status-badge {
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.orchestrator-status-badge.status-idle {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.orchestrator-status-badge.status-executing {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.orchestrator-status-badge.status-waiting {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.orchestrator-status-badge.status-blocked {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.orchestrator-status-badge.status-complete {
+  background: rgba(107, 114, 128, 0.2);
+  color: #6b7280;
+  border: 1px solid rgba(107, 114, 128, 0.4);
+}
+
+.orchestrator-info {
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+}
+
+.info-row:last-child {
+  margin-bottom: 0;
+}
+
+.info-label {
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.info-value {
+  color: #e5e7eb;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.orchestrator-fill {
+  background: linear-gradient(90deg, #a78bfa 0%, #8b5cf6 100%);
+}
+
+.orchestrator-footer {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(139, 92, 246, 0.2);
+  font-size: 0.75rem;
+}
+
+.footer-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.375rem;
+}
+
+.footer-row:last-child {
+  margin-bottom: 0;
+}
+
+.footer-row.total {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(139, 92, 246, 0.15);
+  font-weight: 600;
+}
+
+.footer-label {
+  color: #9ca3af;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.footer-value {
+  color: #e5e7eb;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.orchestrator-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px dashed rgba(139, 92, 246, 0.3);
+  border-radius: 6px;
+  min-height: 80px;
+}
+
+.placeholder-text {
+  color: #6b7280;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.orchestrator-compact {
+  border-color: #8b5cf6;
+}
+
+.orchestrator-compact:hover {
+  background: #13152a;
+  border-color: #a78bfa;
+}
+
+.orchestrator-compact.active {
+  background: #13152a;
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.6);
 }
 
 /* All Agents Button */
