@@ -87,43 +87,82 @@ def _resolve_available_agents(agents_dir: Path = AGENTS_DIR) -> str:
     return "\n".join(lines)
 
 
-def _resolve_cleo_context() -> str:
-    """Return a live CLEO task snapshot by running the `cleo` CLI.
+def _run_cleo_command(args: list[str], timeout: int = 10) -> str | None:
+    """Run a single cleo CLI command and return stdout on success.
 
-    Tries ``cleo dash`` first, then ``cleo current`` as a fallback.  If the
-    CLI is unavailable or returns an error, a graceful fallback message is
-    returned so the prompt remains valid.
+    Returns ``None`` on failure (non-zero exit, timeout, or missing binary).
+    Callers are responsible for logging at the appropriate level.
     """
-    commands = [
-        ["cleo", "dash"],
-        ["cleo", "current"],
-    ]
+    try:
+        result = subprocess.run(
+            ["cleo"] + args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        logger.debug(
+            "cleo %s returned code %d — skipping section",
+            " ".join(args),
+            result.returncode,
+        )
+        return None
+    except FileNotFoundError:
+        logger.info("cleo CLI not found in PATH")
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("cleo %s timed out", " ".join(args))
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cleo %s failed (%s)", " ".join(args), exc)
+        return None
 
-    for cmd in commands:
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                logger.debug("CLEO_CONTEXT resolved via '%s'", " ".join(cmd))
-                return result.stdout.strip()
-            logger.debug(
-                "Command '%s' returned code %d, trying next",
-                " ".join(cmd),
-                result.returncode,
-            )
-        except FileNotFoundError:
-            logger.info("cleo CLI not found in PATH — using fallback CLEO_CONTEXT")
-            break
-        except subprocess.TimeoutExpired:
-            logger.warning("cleo command timed out — using fallback CLEO_CONTEXT")
-            break
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("cleo command failed (%s) — using fallback CLEO_CONTEXT", exc)
-            break
+
+def _resolve_cleo_context() -> str:
+    """Return a live CLEO task snapshot by running multiple `cleo` CLI commands.
+
+    Gathers three sections of context, each from a distinct cleo sub-command:
+
+    1. **Project overview** — ``cleo dash`` (summary of all epics/tasks)
+    2. **Active task** — ``cleo current`` (task currently in focus)
+    3. **Blockers** — ``cleo find "blocked"`` (tasks with blocked status)
+
+    Each section is formatted with a heading so the orchestrator can reference
+    it independently.  If the CLI is unavailable or a command fails, its
+    section is omitted and a graceful fallback is returned so the prompt
+    remains valid.
+
+    The function is called fresh on every ``build_system_prompt()`` invocation
+    so the orchestrator always sees current task state.
+    """
+    sections: list[str] = []
+
+    # ── 1. Project overview ───────────────────────────────────────────────
+    dash_output = _run_cleo_command(["dash"])
+    if dash_output:
+        sections.append("### Project Overview\n\n" + dash_output)
+        logger.debug("CLEO_CONTEXT: project overview resolved via 'cleo dash'")
+
+    # ── 2. Active / current task ──────────────────────────────────────────
+    current_output = _run_cleo_command(["current"])
+    if current_output:
+        sections.append("### Active Task\n\n" + current_output)
+        logger.debug("CLEO_CONTEXT: active task resolved via 'cleo current'")
+
+    # ── 3. Blockers ───────────────────────────────────────────────────────
+    blocked_output = _run_cleo_command(["find", "blocked"])
+    if blocked_output:
+        sections.append("### Blockers\n\n" + blocked_output)
+        logger.debug("CLEO_CONTEXT: blockers resolved via 'cleo find blocked'")
+
+    if sections:
+        logger.info(
+            "CLEO_CONTEXT resolved with %d section(s) (%d chars)",
+            len(sections),
+            sum(len(s) for s in sections),
+        )
+        return "\n\n---\n\n".join(sections)
 
     return "_CLEO context unavailable — `cleo` CLI could not be reached._"
 

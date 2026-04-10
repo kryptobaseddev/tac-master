@@ -41,9 +41,12 @@ import type {
   RunSummary,
   RepoStatus,
   TacWsMessage,
+  ThinkingBlockWsMessage,
+  ToolUseBlockWsMessage,
 } from "../types";
 
 const MAX_EVENT_STREAM_SIZE = 2000;
+const MAX_STREAMING_BLOCK_SIZE = 500;
 
 // ---------------------------------------------------------------------------
 // Mapping helpers: tac-master → orchestrator shapes
@@ -267,6 +270,25 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   const websocketEventCount = ref(0);
   const commandInputVisible = ref(false);
 
+  // --- streaming block state (T076) ---
+  const thinkingBlocks = ref<ThinkingBlockWsMessage["data"][]>([]);
+  const toolUseBlocks = ref<ToolUseBlockWsMessage["data"][]>([]);
+  const textBlocks = ref<Array<{
+    id: string;
+    orchestrator_agent_id: string;
+    text: string;
+    timestamp: number;
+  }>>([]);
+  const agentStatuses = ref<Array<{
+    id: string;
+    adw_id: string;
+    session_id: string;
+    phase: string;
+    hook_event_type: string;
+    timestamp: number;
+  }>>([]);
+  const lastHeartbeat = ref<number | null>(null);
+
   // --- getters ---
   const activeAgents = computed(() =>
     agents.value.filter((a) => !a.archived && a.status !== "complete"),
@@ -315,6 +337,65 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
   const totalTokensToday = computed(() =>
     repos.value.reduce((s, r) => s + r.tokens_today, 0),
   );
+
+  /**
+   * Get all streaming blocks for a given adw_id in timestamp order.
+   * Returns a combined array of thinking, tool use, text, and agent status blocks
+   * sorted by timestamp (ascending).
+   */
+  const activeBlocksByAdwId = (adwId: string) => {
+    const blocks: Array<{
+      type: "thinking" | "tool_use" | "text" | "agent_status";
+      id: string;
+      timestamp: number;
+      data: any;
+    }> = [];
+
+    // Collect thinking blocks for this adw_id
+    thinkingBlocks.value.forEach((block) => {
+      blocks.push({
+        type: "thinking",
+        id: block.id,
+        timestamp: block.timestamp,
+        data: block,
+      });
+    });
+
+    // Collect tool use blocks for this adw_id
+    toolUseBlocks.value.forEach((block) => {
+      blocks.push({
+        type: "tool_use",
+        id: block.id,
+        timestamp: block.timestamp,
+        data: block,
+      });
+    });
+
+    // Collect text blocks for this adw_id
+    textBlocks.value.forEach((block) => {
+      blocks.push({
+        type: "text",
+        id: block.id,
+        timestamp: block.timestamp,
+        data: block,
+      });
+    });
+
+    // Collect agent status blocks for this adw_id
+    agentStatuses.value.forEach((block) => {
+      if (block.adw_id === adwId) {
+        blocks.push({
+          type: "agent_status",
+          id: block.id,
+          timestamp: block.timestamp,
+          data: block,
+        });
+      }
+    });
+
+    // Sort by timestamp (ascending order)
+    return blocks.sort((a, b) => a.timestamp - b.timestamp);
+  };
 
   // --- actions ---
 
@@ -368,6 +449,71 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
 
   function hydrateFromInitial(events: HookEvent[]) {
     eventStreamEntries.value = events.map((e, i) => hookToEventStreamEntry(e, i));
+  }
+
+  // --- streaming block actions (T076) ---
+
+  /**
+   * Add a thinking block to the thinking blocks array with FIFO eviction.
+   * If array exceeds MAX_STREAMING_BLOCK_SIZE, remove oldest entry.
+   */
+  function addThinkingBlock(data: ThinkingBlockWsMessage["data"]) {
+    thinkingBlocks.value.push(data);
+    if (thinkingBlocks.value.length > MAX_STREAMING_BLOCK_SIZE) {
+      thinkingBlocks.value.shift();
+    }
+  }
+
+  /**
+   * Add a tool use block to the tool use blocks array with FIFO eviction.
+   * If array exceeds MAX_STREAMING_BLOCK_SIZE, remove oldest entry.
+   */
+  function addToolUseBlock(data: ToolUseBlockWsMessage["data"]) {
+    toolUseBlocks.value.push(data);
+    if (toolUseBlocks.value.length > MAX_STREAMING_BLOCK_SIZE) {
+      toolUseBlocks.value.shift();
+    }
+  }
+
+  /**
+   * Add a text block to the text blocks array with FIFO eviction.
+   * If array exceeds MAX_STREAMING_BLOCK_SIZE, remove oldest entry.
+   */
+  function addTextBlock(data: {
+    id: string;
+    orchestrator_agent_id: string;
+    text: string;
+    timestamp: number;
+  }) {
+    textBlocks.value.push(data);
+    if (textBlocks.value.length > MAX_STREAMING_BLOCK_SIZE) {
+      textBlocks.value.shift();
+    }
+  }
+
+  /**
+   * Add an agent status event to the agent statuses array with FIFO eviction.
+   * If array exceeds MAX_STREAMING_BLOCK_SIZE, remove oldest entry.
+   */
+  function addAgentStatus(data: {
+    id: string;
+    adw_id: string;
+    session_id: string;
+    phase: string;
+    hook_event_type: string;
+    timestamp: number;
+  }) {
+    agentStatuses.value.push(data);
+    if (agentStatuses.value.length > MAX_STREAMING_BLOCK_SIZE) {
+      agentStatuses.value.shift();
+    }
+  }
+
+  /**
+   * Update the last heartbeat timestamp.
+   */
+  function updateHeartbeat(timestamp: number) {
+    lastHeartbeat.value = timestamp;
   }
 
   // --- HTTP bootstrap ---
@@ -462,6 +608,18 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     /** Command input visibility toggle */
     commandInputVisible,
 
+    // --- STREAMING BLOCK STATE (T076) ---
+    /** Thinking blocks from streaming responses */
+    thinkingBlocks,
+    /** Tool use blocks from streaming responses */
+    toolUseBlocks,
+    /** Text blocks from streaming responses */
+    textBlocks,
+    /** Agent status events from hooks */
+    agentStatuses,
+    /** Timestamp of the last heartbeat event */
+    lastHeartbeat,
+
     // --- PUBLIC GETTERS ---
     /** Active agents (not archived, status !== complete) */
     activeAgents,
@@ -477,6 +635,8 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     stats,
     /** Total tokens used across all repos today */
     totalTokensToday,
+    /** Get all streaming blocks for a given adw_id in timestamp order */
+    activeBlocksByAdwId,
 
     // --- PUBLIC ACTIONS ---
     /** Initialize store: load initial data and establish WebSocket */
@@ -491,5 +651,17 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     clearEventStream,
     /** Toggle command input visibility */
     toggleCommandInput,
+
+    // --- STREAMING BLOCK ACTIONS (T076) ---
+    /** Add a thinking block to the store */
+    addThinkingBlock,
+    /** Add a tool use block to the store */
+    addToolUseBlock,
+    /** Add a text block to the store */
+    addTextBlock,
+    /** Add an agent status event to the store */
+    addAgentStatus,
+    /** Update the last heartbeat timestamp */
+    updateHeartbeat,
   };
 });

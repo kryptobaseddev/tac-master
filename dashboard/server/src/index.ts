@@ -29,7 +29,6 @@ import {
   getChatHistory,
   getTurnCount,
   getActiveOrchestrator,
-  getChatHistoryFromTacMaster,
   getSystemLogs,
 } from "./db";
 import {
@@ -203,6 +202,11 @@ const server = Bun.serve({
     }
 
     // --- Hook ingestion ---
+    // T091: After DB write, immediately broadcast via WebSocketManager.
+    // Events appear on WS clients within 200ms of POST.
+    // Supports block types: thinking_block, tool_use_block, text_block (set by T068 send_event.py).
+    // Lifecycle hook events (PreToolUse, PostToolUse, Stop, etc.) broadcast as agent_status.
+    // All events also broadcast as raw "event" type for backward compat.
     if (url.pathname === "/events" && req.method === "POST") {
       try {
         const body = (await req.json()) as HookEvent;
@@ -210,7 +214,42 @@ const server = Bun.serve({
           return json({ error: "missing required fields" }, 400);
         }
         const saved = insertEvent(body);
+
+        // Always broadcast the raw event — backward compat for existing consumers
         wsManager.broadcast({ type: "event", data: saved });
+
+        // Route by block_type for typed streaming block events (T091)
+        const ts = saved.timestamp ?? Date.now();
+        const adwId = saved.adw_id ?? saved.session_id;
+        const phase = saved.phase ?? "unknown";
+
+        if (saved.block_type === "thinking_block") {
+          const thinking = String(saved.payload?.thinking ?? saved.payload?.text ?? "");
+          wsManager.broadcast({
+            type: "thinking_block",
+            data: { adw_id: adwId, session_id: saved.session_id, phase, thinking, timestamp: ts },
+          });
+        } else if (saved.block_type === "tool_use_block") {
+          const tool_name = String(saved.payload?.tool_name ?? saved.payload?.name ?? "unknown");
+          const tool_input = (saved.payload?.tool_input ?? saved.payload?.input ?? {}) as Record<string, unknown>;
+          wsManager.broadcast({
+            type: "tool_use_block",
+            data: { adw_id: adwId, session_id: saved.session_id, phase, tool_name, tool_input, timestamp: ts },
+          });
+        } else if (saved.block_type === "text_block") {
+          const text = String(saved.payload?.text ?? "");
+          wsManager.broadcast({
+            type: "text_block",
+            data: { adw_id: adwId, session_id: saved.session_id, phase, text, timestamp: ts },
+          });
+        } else {
+          // Lifecycle hook events (PreToolUse, PostToolUse, Stop, hook_lifecycle, etc.)
+          wsManager.broadcast({
+            type: "agent_status",
+            data: { adw_id: adwId, session_id: saved.session_id, hook_event_type: saved.hook_event_type, phase, timestamp: ts },
+          });
+        }
+
         return json(saved, 201);
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 400);

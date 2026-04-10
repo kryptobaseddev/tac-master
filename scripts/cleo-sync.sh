@@ -63,23 +63,22 @@ log() {
   echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $LOG_TAG: $*"
 }
 
-# ── Step 1: Check if LXC copy is newer (write-back detection) ──────────────
-DEV_MTIME=0
-LXC_MTIME=0
-
-if [[ -f "$CLEO_DB" ]]; then
-  DEV_MTIME=$(stat -c '%Y' "$CLEO_DB" 2>/dev/null || echo 0)
+# ── Step 1: Check if LXC copy has writes since last push (write-back detection) ──
+# We compare the LXC DB mtime against the mtime we recorded at last push.
+# If LXC is newer than what we last pushed, it has daemon writes to pull back.
+LAST_PUSH_MTIME=0
+if [[ -f "$LAST_PUSH_TS_FILE" ]]; then
+  LAST_PUSH_MTIME=$(cat "$LAST_PUSH_TS_FILE" 2>/dev/null || echo 0)
 fi
 
 LXC_MTIME=$(ssh_lxc "stat -c '%Y' '$LXC_DB_PATH' 2>/dev/null || echo 0" 2>/dev/null || echo 0)
 
-if [[ "$LXC_MTIME" -gt "$DEV_MTIME" ]]; then
-  log "LXC copy is newer (LXC=${LXC_MTIME} dev=${DEV_MTIME}) — pulling write-back to dev"
+if [[ "$LXC_MTIME" -gt "$LAST_PUSH_MTIME" && "$LAST_PUSH_MTIME" -gt "0" ]]; then
+  log "LXC has writes since last push (LXC_mtime=${LXC_MTIME} last_push=${LAST_PUSH_MTIME}) — pulling write-back to dev"
+  # WAL checkpoint on LXC first so we get committed state
+  ssh_lxc "sqlite3 '$LXC_DB_PATH' 'PRAGMA wal_checkpoint(FULL);'" 2>/dev/null || true
   # Pull LXC copy back to dev machine (daemon status updates write-back)
   rsync_pull "$LXC_DB_PATH" "${CLEO_DB}.lxc_writeback"
-  # Also pull WAL/SHM if they exist
-  rsync_pull "${LXC_DB_PATH}-wal" "${CLEO_DB}.lxc_writeback-wal" 2>/dev/null || true
-  rsync_pull "${LXC_DB_PATH}-shm" "${CLEO_DB}.lxc_writeback-shm" 2>/dev/null || true
 
   # WAL checkpoint the pulled copy to make it self-contained
   if command -v sqlite3 &>/dev/null; then
@@ -90,6 +89,10 @@ if [[ "$LXC_MTIME" -gt "$DEV_MTIME" ]]; then
   mv "${CLEO_DB}.lxc_writeback" "$CLEO_DB"
   rm -f "${CLEO_DB}.lxc_writeback-wal" "${CLEO_DB}.lxc_writeback-shm"
   log "Write-back complete — dev copy updated from LXC"
+elif [[ "$LAST_PUSH_MTIME" -eq "0" ]]; then
+  log "First run — skipping write-back check (no previous push recorded)"
+else
+  log "LXC copy not newer than last push (LXC_mtime=${LXC_MTIME} last_push=${LAST_PUSH_MTIME}) — no write-back needed"
 fi
 
 # ── Step 2: WAL checkpoint dev copy before push ────────────────────────────
@@ -106,7 +109,10 @@ if [[ -f "$CLEO_DB" ]]; then
   ssh_lxc "rm -f '${LXC_DB_PATH}-wal' '${LXC_DB_PATH}-shm'" 2>/dev/null || true
   # Fix ownership so krypto user (dashboard server) can read the file
   ssh_lxc "chown krypto:krypto '${LXC_DB_PATH}'" 2>/dev/null || true
-  log "Push to LXC complete"
+  # Record the LXC mtime AFTER our push, so we can detect subsequent LXC writes
+  NEW_LXC_MTIME=$(ssh_lxc "stat -c '%Y' '$LXC_DB_PATH' 2>/dev/null || echo 0" 2>/dev/null || echo 0)
+  echo "$NEW_LXC_MTIME" > "$LAST_PUSH_TS_FILE"
+  log "Push to LXC complete (recorded push mtime: $NEW_LXC_MTIME)"
 else
   log "WARNING: dev CLEO_DB not found at $CLEO_DB — skipping push"
 fi

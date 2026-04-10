@@ -955,30 +955,40 @@ export function insertChatMessage(msg: Omit<ChatMessage, "id">): ChatMessage {
 }
 
 /**
- * Retrieve chat history for a specific orchestrator agent.
+ * Retrieve chat history for a specific orchestrator agent from tac_master.sqlite.
+ * Queries chat_messages table (the source of truth for orchestrator persistence).
  * Returns rows sorted oldest-first, scoped to the orchestrator_agent_id.
  */
 export function getChatHistory(orchestratorAgentId: string, limit = 50): ChatMessage[] {
-  const rows = db()
-    .prepare(
-      `SELECT * FROM orchestrator_chat
-       WHERE orchestrator_agent_id = ?
-       ORDER BY created_at ASC
-       LIMIT ?`,
-    )
-    .all(orchestratorAgentId, limit) as any[];
+  if (!tacDb) return [];
 
-  return rows.map((row) => ({
-    id: row.id,
-    orchestrator_agent_id: row.orchestrator_agent_id,
-    sender_type: row.sender_type,
-    receiver_type: row.receiver_type,
-    message: row.message,
-    metadata: safeParse(row.metadata),
-    summary: row.summary ?? null,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  }));
+  try {
+    const rows = tacDb
+      .prepare(
+        `SELECT * FROM chat_messages
+         WHERE orchestrator_agent_id = ?
+         ORDER BY created_at ASC
+         LIMIT ?`,
+      )
+      .all(orchestratorAgentId, limit) as any[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      orchestrator_agent_id: row.orchestrator_agent_id,
+      sender_type: row.sender_type,
+      receiver_type: row.receiver_type,
+      message: row.message,
+      summary: row.summary ?? null,
+      agent_id: row.agent_id ?? null,
+      session_id: row.session_id ?? null,
+      metadata: safeParse(row.metadata),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    }));
+  } catch (e) {
+    console.error("[getChatHistory] query failed:", e);
+    return [];
+  }
 }
 
 /**
@@ -1032,46 +1042,6 @@ export function getActiveOrchestrator(): OrchestratorAgent | null {
   } catch (e) {
     console.error("[getActiveOrchestrator] query failed:", e);
     return null;
-  }
-}
-
-/**
- * Get chat message history for a specific orchestrator agent from tac_master.sqlite.
- * Queries chat_messages WHERE orchestrator_agent_id = ? ORDER BY created_at ASC.
- * Returns rows sorted oldest-first.
- */
-export function getChatHistoryFromTacMaster(
-  orchestratorAgentId: string,
-  limit = 200,
-): ChatMessage[] {
-  if (!tacDb) return [];
-
-  try {
-    const rows = tacDb
-      .prepare(
-        `SELECT * FROM chat_messages
-         WHERE orchestrator_agent_id = ?
-         ORDER BY created_at ASC
-         LIMIT ?`,
-      )
-      .all(orchestratorAgentId, limit) as any[];
-
-    return rows.map((row) => ({
-      id: row.id,
-      orchestrator_agent_id: row.orchestrator_agent_id,
-      sender_type: row.sender_type,
-      receiver_type: row.receiver_type,
-      message: row.message,
-      summary: row.summary ?? null,
-      agent_id: row.agent_id ?? null,
-      session_id: row.session_id ?? null,
-      metadata: safeParse(row.metadata),
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    }));
-  } catch (e) {
-    console.error("[getChatHistoryFromTacMaster] query failed:", e);
-    return [];
   }
 }
 
