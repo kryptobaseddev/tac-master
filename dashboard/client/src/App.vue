@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { useOrchestratorStore } from "./stores/orchestratorStore";
+import { useChatStore } from "./stores/chatStore";
 // T071 / T092: WebSocket composable — connects on mount, routes all WsMessage
 // types to the store, and handles exponential-backoff reconnect automatically.
 import { useWebSocket } from "./composables/useWebSocket";
@@ -21,6 +22,7 @@ import DependencyGraph from "./components/DependencyGraph.vue";
 
 // Right panel
 import LiveExecutionPanel from "./components/LiveExecutionPanel.vue";
+import OrchestratorChat from "./components/OrchestratorChat.vue";
 
 // Sidebar — CLEO task tree
 import EpicTaskTree from "./components/command-center/EpicTaskTree.vue";
@@ -44,6 +46,7 @@ import ConfigPage from "./components/ConfigPage.vue";
 
 // ── Store ─────────────────────────────────────────────────────────
 const store = useOrchestratorStore();
+const chatStore = useChatStore();
 
 // ── WebSocket (T071/T092) ─────────────────────────────────────────
 // useWebSocket connects on mount, routes all WsMessage types to the store,
@@ -71,6 +74,10 @@ function closePhaseModal(): void {
 // ── Tab routing ───────────────────────────────────────────────────
 type Tab = "dashboard" | "repos" | "config" | "logs";
 const activeTab = ref<Tab>("dashboard");
+
+// ── Right panel tabs (T104) ────────────────────────────────────
+type RightPanelTab = "execution" | "chat";
+const rightPanelTab = ref<RightPanelTab>("execution");
 
 // ── Repo selection ────────────────────────────────────────────────
 // currentRepoUrl: user-selected repo (shown in HeaderBar dropdown)
@@ -116,6 +123,15 @@ onMounted(() => {
       unsub();
     }
   });
+
+  // Load chat history on mount (T104)
+  const agentId = store.orchestratorAgentId || "tac-master";
+  if (agentId) {
+    chatStore.loadHistory(agentId).catch((err) => {
+      console.warn("[App.vue] Failed to load chat history:", err);
+      // Not an error — just no prior session
+    });
+  }
 });
 </script>
 
@@ -175,9 +191,31 @@ onMounted(() => {
       />
     </template>
 
-    <!-- ── Right sidebar: live execution feed ────────────── -->
+    <!-- ── Right sidebar: live execution feed & chat (T104) ──── -->
     <template #right>
-      <LiveExecutionPanel />
+      <!-- Right panel tabs (T104) -->
+      <div class="right-panel-container">
+        <div class="right-panel-tabs">
+          <button
+            class="right-panel-tab"
+            :class="{ 'right-panel-tab--active': rightPanelTab === 'execution' }"
+            @click="rightPanelTab = 'execution'"
+          >
+            Execution
+          </button>
+          <button
+            class="right-panel-tab"
+            :class="{ 'right-panel-tab--active': rightPanelTab === 'chat' }"
+            @click="rightPanelTab = 'chat'"
+          >
+            Chat
+          </button>
+        </div>
+        <div class="right-panel-content">
+          <LiveExecutionPanel v-show="rightPanelTab === 'execution'" />
+          <OrchestratorChat v-show="rightPanelTab === 'chat'" />
+        </div>
+      </div>
     </template>
 
     <!-- ── Command bar (T053) ────────────────────────────── -->
@@ -229,5 +267,51 @@ html, body, #app {
   border-radius: 6px;
   overflow: hidden;
   background: #0d0f1a;
+}
+
+/* Right panel container with tabs (T104) */
+.right-panel-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.right-panel-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+
+.right-panel-tab {
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.right-panel-tab:hover {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.right-panel-tab--active {
+  color: #00ffcc;
+  border-bottom-color: #00ffcc;
+}
+
+.right-panel-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 </style>

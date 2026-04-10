@@ -20,6 +20,9 @@
 
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useToastStore } from '../stores/toastStore'
+import { useChatStore } from '../stores/chatStore'
+import { useOrchestratorStore } from '../stores/orchestratorStore'
+import * as chatService from '../services/chatService'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const HISTORY_KEY   = 'cmd-bar-history'
@@ -34,6 +37,8 @@ const SHORTCUTS = [
 
 // ── Store ────────────────────────────────────────────────────────────────────
 const toastStore = useToastStore()
+const chatStore = useChatStore()
+const orchestratorStore = useOrchestratorStore()
 
 // ── State ────────────────────────────────────────────────────────────────────
 const input       = ref('')
@@ -208,13 +213,31 @@ async function dispatch(raw: string) {
     return
   }
 
-  // Free text → create GitHub issue
-  const res = await apiPost({ type: 'freetext', text: raw })
-  if (res.ok) {
-    const url = res.data?.issue_url
-    toastStore.success(url ? `Issue created: ${url}` : 'Command dispatched to agent')
-  } else {
-    toastStore.error(`Dispatch failed: ${res.error}`)
+  // Free text → send to chat (T104)
+  try {
+    const agentId = chatStore.orchestratorAgentId ||
+                    orchestratorStore.orchestratorAgentId ||
+                    'tac-master'
+
+    // Add user message to chat optimistically
+    const userMsg = {
+      id: `user-${Date.now()}`,
+      sender: 'user' as const,
+      type: 'text' as const,
+      content: raw,
+      timestamp: new Date().toISOString(),
+    }
+    chatStore.addMessage(userMsg)
+
+    // Set typing indicator
+    chatStore.setTyping(true)
+
+    // Send to orchestrator via chat service
+    await chatService.sendMessage(raw, agentId)
+    toastStore.success('Message sent to orchestrator')
+  } catch (err: any) {
+    toastStore.error(`Failed to send message: ${err?.message ?? 'Unknown error'}`)
+    chatStore.setTyping(false)
   }
 }
 
