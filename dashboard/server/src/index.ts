@@ -53,6 +53,7 @@ import { WebSocketManager } from "./ws-manager";
 import { getEpics, getTasksByParent, getTaskById, getCleoStats, addTaskNote, updateTaskStatus, createTask, queueTask, getTaskLinks, type CreateTaskBody } from "./cleo-api";
 import { readFile } from "node:fs/promises";
 import { parseStreamFile, resolveStreamPath, listStreamPhases } from "./stream-parser";
+import { OrchestratorBridge } from "./orchestrator-bridge";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const ALLOW_ORIGIN = process.env.CORS_ORIGIN ?? "*";
@@ -129,6 +130,9 @@ function json(body: unknown, status = 200): Response {
 }
 
 const wsManager = new WebSocketManager();
+const orchestratorBridge = new OrchestratorBridge(wsManager, {
+  baseUrl: process.env.ORCHESTRATOR_URL ?? "http://localhost:4001",
+});
 
 // 30-second heartbeat — keeps connections alive and signals liveness to clients.
 // Heavy status data (repo_status, run_update) is no longer polled; it is pushed
@@ -737,17 +741,19 @@ const server = Bun.serve({
           message: userMsg,
         });
 
-        // Broadcast typing indicator
-        wsManager.broadcast({
-          type: "chat_typing",
-          orchestrator_agent_id: body.orchestrator_agent_id,
-          is_typing: true,
+        // Trigger OrchestratorBridge.sendMessage() asynchronously (fire-and-forget)
+        // The bridge will:
+        // 1. Broadcast chat_typing {is_typing: true}
+        // 2. POST to orchestrator /chat endpoint
+        // 3. Orchestrator streams response blocks via /events which broadcasts
+        //    them as orchestrator_chat messages to WebSocket clients
+        // 4. Broadcast chat_typing {is_typing: false} when complete
+        orchestratorBridge.sendMessage(
+          body.message.trim(),
+          body.orchestrator_agent_id,
+        ).catch((err) => {
+          console.error("[chat/send] orchestrator bridge error:", err);
         });
-
-        // TODO: trigger OrchestratorBridge.sendMessage() asynchronously
-        // For now, this is fire-and-forget. The orchestrator bridge will be
-        // responsible for reading the message and streaming response blocks
-        // back through the existing WebSocket pipeline.
 
         return json({ ok: true, message_id: userMsg.id }, 200);
       } catch (e: any) {
