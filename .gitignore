@@ -4,6 +4,12 @@
 !.env.sample
 config/identity.env
 config/*.local.yaml
+
+# User config files — only .sample templates are tracked in git.
+# Copy *.sample → * and fill in your values; git pull will never overwrite them.
+config/repos.yaml
+config/budgets.yaml
+config/policies.yaml
 # Catch-all: any file with creds / secret / password / token in its name
 *creds*
 *secret*

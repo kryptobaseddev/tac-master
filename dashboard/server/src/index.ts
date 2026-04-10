@@ -249,6 +249,42 @@ const server = Bun.serve({
     // Config CRUD — YAML read/write with daemon restart support
     // ============================================================
 
+    // GET /api/config/validate — check all YAML configs for placeholder values and
+    // structural issues. Read-only; never modifies files.
+    if (url.pathname === "/api/config/validate" && req.method === "GET") {
+      const warnings: string[] = [];
+      try {
+        const repos = getReposConfig();
+        for (const repo of repos.repos ?? []) {
+          if (repo.url?.includes("OWNER")) {
+            warnings.push(`repos.yaml: ${repo.url} contains OWNER placeholder — replace with your GitHub username`);
+          }
+          if (!repo.url) {
+            warnings.push("repos.yaml: a repo entry is missing the 'url' field");
+          }
+        }
+        if ((repos.repos ?? []).length === 0) {
+          warnings.push("repos.yaml: no repo entries — daemon will idle");
+        }
+      } catch (e: any) {
+        warnings.push(`repos.yaml: cannot read — ${String(e?.message ?? e)}`);
+      }
+      try {
+        const budgets = getBudgetsConfig();
+        if (!budgets.global?.max_tokens_per_day) {
+          warnings.push("budgets.yaml: missing global.max_tokens_per_day");
+        }
+        for (const repo of budgets.repos ?? []) {
+          if (repo.url?.includes("OWNER")) {
+            warnings.push(`budgets.yaml: ${repo.url} contains OWNER placeholder — replace with your GitHub username`);
+          }
+        }
+      } catch (e: any) {
+        warnings.push(`budgets.yaml: cannot read — ${String(e?.message ?? e)}`);
+      }
+      return json({ valid: warnings.length === 0, warnings });
+    }
+
     // GET /api/config/repos
     if (url.pathname === "/api/config/repos" && req.method === "GET") {
       try {

@@ -211,9 +211,40 @@ update_gh() {
     ok "gh: $(gh --version | head -1)"
 }
 
+# -------- config protection ---------------------------------------------------
+# Backs up user config files before git pull so they are never overwritten.
+# On first install, copies from .sample if no real config exists yet.
+
+_protect_configs() {
+    local config_dir="$TAC_HOME/config"
+    for f in repos.yaml budgets.yaml policies.yaml; do
+        if [ -f "$config_dir/$f" ]; then
+            cp "$config_dir/$f" "$config_dir/$f.user-backup"
+            dim "Backed up config/$f"
+        fi
+    done
+}
+
+_restore_configs() {
+    local config_dir="$TAC_HOME/config"
+    for f in repos.yaml budgets.yaml policies.yaml; do
+        if [ -f "$config_dir/$f.user-backup" ]; then
+            mv "$config_dir/$f.user-backup" "$config_dir/$f"
+            ok "Restored config/$f from backup"
+        elif [ -f "$config_dir/$f.sample" ] && [ ! -f "$config_dir/$f" ]; then
+            # First install — config was never set up; copy from sample
+            cp "$config_dir/$f.sample" "$config_dir/$f"
+            warn "Created config/$f from sample template — edit with your values before starting"
+        fi
+    done
+}
+
 update_tac_master() {
     [[ -d "$TAC_HOME/.git" ]] || die "tac-master not cloned at $TAC_HOME"
     log "Pulling tac-master from origin..."
+
+    _protect_configs
+
     run_as_user "cd $TAC_HOME && git fetch --all --prune"
     local branch
     branch=$(run_as_user "cd $TAC_HOME && git rev-parse --abbrev-ref HEAD")
@@ -225,6 +256,8 @@ update_tac_master() {
         run_as_user "cd $TAC_HOME && git reset --hard origin/$branch"
         ok "tac-master updated to $(run_as_user "cd $TAC_HOME && git rev-parse --short HEAD")"
     fi
+
+    _restore_configs
 }
 
 update_dashboard_client() {

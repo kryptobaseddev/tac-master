@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator.budget import BudgetEnforcer
 from orchestrator.config import TacMasterConfig, load_config
+from orchestrator.config_validator import validate_all, has_fatal
 from orchestrator.dispatcher import Dispatcher
 from orchestrator.github_client import GitHubClient
 from orchestrator.knowledge import KnowledgeBase
@@ -260,6 +261,20 @@ def main() -> int:
 
     _configure_logging(cfg)
     log = logging.getLogger("daemon")
+
+    # Validate user config files for structural issues and placeholder values.
+    # Warnings are emitted to the log; FATAL warnings abort startup.
+    _config_warnings = validate_all(cfg.home / "config")
+    for _w in _config_warnings:
+        if _w.startswith("FATAL:"):
+            log.error("Config validation %s", _w)
+        else:
+            log.warning("Config validation %s", _w)
+    if has_fatal(_config_warnings):
+        log.error(
+            "Startup aborted: fix the FATAL config issues above, then restart the daemon."
+        )
+        return 3
 
     if args.doctor:
         return cmd_doctor(cfg)
