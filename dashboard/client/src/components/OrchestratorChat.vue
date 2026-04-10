@@ -83,6 +83,26 @@
       <div ref="bottomRef"></div>
     </div>
 
+    <!-- Jump to bottom button -->
+    <button
+      v-if="showJumpButton"
+      class="jump-to-bottom-button"
+      @click="jumpToBottom"
+      title="Jump to latest message"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <polyline points="12 19 12 5 5 12"></polyline>
+        <polyline points="12 5 19 12"></polyline>
+      </svg>
+    </button>
+
     <!-- Input bar -->
     <div class="chat-input-bar">
       <textarea
@@ -129,7 +149,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import ThinkingBubble from "./chat/ThinkingBubble.vue";
 import ToolUseBubble from "./chat/ToolUseBubble.vue";
 import type {
@@ -154,6 +174,8 @@ const inputRef = ref<HTMLTextAreaElement>();
 
 // Local state
 const inputText = ref<string>("");
+const autoScrollEnabled = ref<boolean>(true);
+const showJumpButton = ref<boolean>(false);
 
 // Reactive bindings from chatStore
 const messages = computed<ChatMessage[]>(() => chatStore.messages);
@@ -163,21 +185,55 @@ const isTyping = computed<boolean>(() => chatStore.isTyping);
 const scrollToBottom = async () => {
   await nextTick();
   bottomRef.value?.scrollIntoView({ behavior: "smooth" });
+  autoScrollEnabled.value = true;
+  showJumpButton.value = false;
+};
+
+// Jump to bottom helper (explicit click)
+const jumpToBottom = async () => {
+  await scrollToBottom();
+};
+
+// Check if near bottom (within 50px threshold)
+const isNearBottom = (): boolean => {
+  const container = messagesRef.value;
+  if (!container) return true;
+  const scrollTop = container.scrollTop;
+  const scrollHeight = container.scrollHeight;
+  const clientHeight = container.clientHeight;
+  const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+  return distanceFromBottom <= 50;
+};
+
+// Handle scroll events for pause/resume logic
+const handleMessagesScroll = () => {
+  if (isNearBottom()) {
+    // User scrolled back to bottom, re-enable auto-scroll
+    autoScrollEnabled.value = true;
+    showJumpButton.value = false;
+  } else {
+    // User scrolled up >50px, pause auto-scroll
+    autoScrollEnabled.value = false;
+    showJumpButton.value = true;
+  }
 };
 
 // Auto-scroll when messages change
 watch(
   () => messages.value.length,
   () => {
-    if (chatStore.autoScroll) {
+    if (chatStore.autoScroll && autoScrollEnabled.value) {
       scrollToBottom();
+    } else if (!autoScrollEnabled.value) {
+      // Show jump button if scrolled up and messages changed
+      showJumpButton.value = true;
     }
   }
 );
 
 // Auto-scroll when typing indicator changes
 watch(isTyping, () => {
-  if (chatStore.autoScroll) {
+  if (chatStore.autoScroll && autoScrollEnabled.value) {
     scrollToBottom();
   }
 });
@@ -194,8 +250,11 @@ watch(
     return "";
   },
   () => {
-    if (chatStore.autoScroll) {
+    if (chatStore.autoScroll && autoScrollEnabled.value) {
       scrollToBottom();
+    } else if (!autoScrollEnabled.value) {
+      // Show jump button if scrolled up and content changed
+      showJumpButton.value = true;
     }
   }
 );
@@ -294,6 +353,18 @@ onMounted(async () => {
   // Scroll to bottom after loading history
   await nextTick();
   setTimeout(() => scrollToBottom(), 100);
+
+  // Attach scroll listener for pause/resume logic
+  if (messagesRef.value) {
+    messagesRef.value.addEventListener("scroll", handleMessagesScroll);
+  }
+});
+
+// Clean up scroll listener on unmount
+onBeforeUnmount(() => {
+  if (messagesRef.value) {
+    messagesRef.value.removeEventListener("scroll", handleMessagesScroll);
+  }
 });
 </script>
 
@@ -301,6 +372,7 @@ onMounted(async () => {
 .orchestrator-chat {
   display: flex;
   flex-direction: column;
+  position: relative;
   height: 100%;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
@@ -609,5 +681,53 @@ onMounted(async () => {
 .send-button svg {
   width: 16px;
   height: 16px;
+}
+
+/* Jump to bottom button */
+.jump-to-bottom-button {
+  position: absolute;
+  bottom: 100px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: var(--accent-primary);
+  border: none;
+  border-radius: 50%;
+  color: #000;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(6, 182, 212, 0.4);
+  transition: all 0.2s ease;
+  z-index: 10;
+  animation: slideUp 0.3s ease-out;
+}
+
+.jump-to-bottom-button:hover {
+  background: rgba(6, 182, 212, 0.85);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(6, 182, 212, 0.5);
+}
+
+.jump-to-bottom-button:active {
+  transform: translateY(0);
+}
+
+.jump-to-bottom-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>
