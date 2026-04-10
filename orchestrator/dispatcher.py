@@ -216,6 +216,19 @@ class Dispatcher:
         self.store.update_run(adw_id, worktree_path=str(wt_path), status="running")
         self.budget.record_dispatch(repo.url)
 
+        # Propagate cleo_task_id to agent_instances if present.
+        # agent_instances rows for this adw_id may not exist yet (they are
+        # created by the orchestrator service), but set_agent_instance_cleo_task_id
+        # is idempotent — it does a best-effort UPDATE that is a no-op if no
+        # rows exist yet. The important mapping lives in runs.cleo_task_id.
+        if cleo_task_id:
+            try:
+                self.store.set_agent_instance_cleo_task_id(adw_id, cleo_task_id)
+            except Exception as e:
+                log.debug(
+                    "set_agent_instance_cleo_task_id failed (non-blocking): %s", e
+                )
+
         # Inject top-K relevant lessons into the worktree as a prompt tail
         # for the Lead's classifier/planner to discover.
         try:
@@ -326,6 +339,7 @@ class Dispatcher:
                 task = data.get("data", {}).get("task", data)
                 return {
                     "title": task.get("title", ""),
+                    "description": task.get("description", ""),
                     "parentId": task.get("parentId"),
                     "depends": task.get("depends") or [],
                     "acceptance": task.get("acceptance") or [],
@@ -549,14 +563,10 @@ class Dispatcher:
                 repo_config.url, issue.number, task_id,
             )
 
-            # Store mapping: update agent_instances rows that link to this adw
-            # via runs.cleo_task_id so the CLEO task ID is findable from agent side.
-            # Also update the runs row directly since that's the primary join key.
-            self.store.set_agent_instance_cleo_task_id(
-                adw_id=f"cleo:{task_id}",  # logical key before adw_id allocated
-                cleo_task_id=task_id,
-            )
-
+            # Record the creation event so the dashboard and reap callbacks can
+            # look up cleo_task_id → issue_number.  The full agent_instances
+            # mapping (cleo_task_id column) is written at dispatch time by
+            # _dispatch() once the adw_id is allocated.
             self.store.record_event(
                 "cleo_issue_created",
                 json.dumps({
@@ -577,40 +587,64 @@ class Dispatcher:
 
     # ------------------------------------------------------------------
     def _create_followup_task(
-        self, cleo_task_id: str, adw_id: str, reason: str
+        self, cleo_task_id: str, adw_id: str, final_status: str
     ) -> None:
         """Create a follow-up CLEO task for a failed or incomplete ADW run.
 
         Adds a child task under cleo_task_id with:
-          title: "Fix: {reason} in ADW {adw_id}"
-          priority: high
+          - Failed: title "Fix: {original_title}", high priority
+          - Incomplete: title "Resume: {original_title}", high priority
+          - Labels: ["auto-followup", "fix"]
+          - Type: task
 
-        Appends the new task ID as a note on the parent for traceability.
-        Skips creation if the parent task title starts with "Fix:" to prevent
-        infinite follow-up chains.
+        Skips creation if the original task title starts with "Fix:" or "Resume:"
+        to prevent infinite follow-up chains.
         Non-blocking — failures are logged as warnings, never raised.
         """
         try:
-            # Guard: don't create follow-ups for tasks that are themselves follow-ups.
+            # Fetch parent task to get original title
             parent = self._fetch_cleo_task_details(cleo_task_id)
-            if parent and parent.get("title", "").startswith("Fix:"):
+            if not parent:
                 log.debug(
-                    "_create_followup_task: skipping follow-up for %s — title starts with 'Fix:'",
+                    "_create_followup_task: could not fetch task %s", cleo_task_id
+                )
+                return
+
+            original_title = parent.get("title", "")
+
+            # Loop guard: don't create follow-ups for tasks that are themselves follow-ups.
+            if original_title.startswith("Fix:") or original_title.startswith("Resume:"):
+                log.debug(
+                    "_create_followup_task: skipping follow-up for %s — "
+                    "title already starts with 'Fix:' or 'Resume:'",
                     cleo_task_id,
                 )
                 return
 
-            followup_title = f"Fix: {reason} in ADW {adw_id}"
+            # Determine prefix and reason based on final_status
+            if final_status == "failed":
+                prefix = "Fix"
+                reason_text = "ADW run failed"
+            else:  # incomplete
+                prefix = "Resume"
+                reason_text = "ADW run incomplete"
+
+            followup_title = f"{prefix}: {original_title}"
+
+            # Build cleo add command with all required fields
+            cmd = [
+                "cleo", "add",
+                "--parent", cleo_task_id,
+                "--title", followup_title,
+                "--priority", "high",
+                "--type", "task",
+            ]
+
             result = subprocess.run(
-                [
-                    "cleo", "add",
-                    "--parent", cleo_task_id,
-                    "--title", followup_title,
-                    "--priority", "high",
-                ],
+                cmd,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=5,
             )
             if result.returncode != 0:
                 log.warning(
@@ -636,23 +670,42 @@ class Dispatcher:
                     if re.match(r"T\d+", candidate):
                         new_task_id = candidate
 
+            # Attempt to add labels to the follow-up task
+            if new_task_id:
+                try:
+                    subprocess.run(
+                        [
+                            "cleo", "update", new_task_id,
+                            "--labels", "auto-followup", "fix",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log.debug(
+                        "_create_followup_task: setting labels on %s failed (non-blocking): %s",
+                        new_task_id, e,
+                    )
+
+            # Append note to parent for traceability
             note = (
                 f"Follow-up task created: {new_task_id or '(see cleo)'} "
-                f"for ADW {adw_id} failure"
+                f"({reason_text}, ADW {adw_id})"
             )
             try:
                 subprocess.run(
-                    ["cleo", "note", cleo_task_id, note],
+                    ["cleo", "update", cleo_task_id, "--note", note],
                     capture_output=True,
                     text=True,
-                    timeout=15,
+                    timeout=5,
                 )
             except Exception as e:  # noqa: BLE001
-                log.debug("_create_followup_task: cleo note failed (non-blocking): %s", e)
+                log.debug("_create_followup_task: adding note to %s failed (non-blocking): %s", cleo_task_id, e)
 
             log.info(
-                "Created follow-up task %s for %s (ADW %s reason: %s)",
-                new_task_id or "(unknown)", cleo_task_id, adw_id, reason,
+                "Created follow-up task %s (%s: %s) for %s (ADW %s)",
+                new_task_id or "(unknown)", prefix, original_title, cleo_task_id, adw_id,
             )
 
         except Exception as e:  # noqa: BLE001
@@ -830,7 +883,7 @@ class Dispatcher:
                         self._create_followup_task(
                             cleo_task_id=cleo_task_id,
                             adw_id=adw_id,
-                            reason=final_status,
+                            final_status=final_status,
                         )
                 except Exception as e:
                     log.warning(
