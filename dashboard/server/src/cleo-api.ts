@@ -54,7 +54,8 @@ function getDb(): Database|null {
 function getDbWrite(): Database|null {
   const path=resolveDbPath(); if (!path) return null;
   if (_dbWrite && _dbWritePath===path) return _dbWrite;
-  try { if (_dbWrite) { try{_dbWrite.close();}catch{} } _dbWrite=new Database(path,{readonly:false,create:false}); _dbWritePath=path; console.log(`[cleo-api] opened write handle ${path}`); }
+  // Open without readonly flag — default is read-write
+  try { if (_dbWrite) { try{_dbWrite.close();}catch{} } _dbWrite=new Database(path); _dbWritePath=path; console.log(`[cleo-api] opened write handle ${path}`); }
   catch(e) { console.error("[cleo-api] DB write open failed:",e); _dbWrite=null; _dbWritePath=null; }
   return _dbWrite;
 }
