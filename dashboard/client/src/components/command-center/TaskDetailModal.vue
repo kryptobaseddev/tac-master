@@ -314,9 +314,12 @@ async function queueTask(): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
-    const data = (await resp.json()) as { ok: boolean; queued: boolean; dispatched: boolean; error?: string };
+    const data = (await resp.json()) as { ok: boolean; queued: boolean; dispatched: boolean; issue_url?: string; issue_number?: number; error?: string };
     if (data.ok) {
-      showToast(data.dispatched ? "Queued and dispatched." : "Queued for dispatch.");
+      const msg = data.issue_number
+        ? `GitHub issue #${data.issue_number} created — daemon dispatching within 20s`
+        : data.dispatched ? "Queued and dispatched." : "Queued for dispatch.";
+      showToast(msg);
       await store.openTaskModal(store.activeModal.id);
       await store.fetchEpics();
     } else {

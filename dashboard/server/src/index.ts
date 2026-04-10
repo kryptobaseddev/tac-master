@@ -23,6 +23,8 @@ import {
   getRunPhases,
   getRunPhaseSummary,
   getAggregateStats,
+  logOperatorAction,
+  getOperatorLog,
 } from "./db";
 import {
   getReposConfig,
@@ -145,6 +147,36 @@ setInterval(() => {
     console.error("[poll] error:", e);
   }
 }, 5000);
+
+// Daemon activity sync — every 30s check tac_master.sqlite for new runs
+// and forward them into the operator_log so the operator sees daemon activity.
+let _daemonSyncLastTs = Math.floor(Date.now() / 1000);
+// Track which adw_ids we've already logged to avoid duplicates across restarts
+const _loggedAdwIds = new Set<string>();
+setInterval(() => {
+  try {
+    const runs = getActiveAndRecentRuns(50);
+    const newRuns = runs.filter(
+      (r) => r.started_at != null && Number(r.started_at) > _daemonSyncLastTs && !_loggedAdwIds.has(r.adw_id),
+    );
+    for (const run of newRuns) {
+      _loggedAdwIds.add(run.adw_id);
+      logOperatorAction({
+        source: "daemon",
+        action: "dispatch",
+        message: `ADW ${run.adw_id} ${run.status} for issue #${run.issue_number ?? "?"}`,
+        adw_id: run.adw_id,
+        issue_number: run.issue_number ?? undefined,
+        metadata: { workflow: run.workflow, model_set: run.model_set },
+      });
+    }
+    if (newRuns.length > 0) {
+      _daemonSyncLastTs = Math.floor(Date.now() / 1000);
+    }
+  } catch {
+    // tac_master.sqlite not available — silently skip
+  }
+}, 30_000);
 
 const server = Bun.serve({
   port: PORT,
@@ -558,6 +590,9 @@ const server = Bun.serve({
         const body = (await req.json()) as { text?: string };
         if (!body.text?.trim()) return json({ error: "text is required" }, 400);
         const result = addTaskNote(id, body.text.trim());
+        if (result.ok) {
+          logOperatorAction({ source: "operator", action: "note", message: `Note on ${id}: ${body.text.trim().slice(0, 80)}`, task_id: id });
+        }
         return json(result, result.ok ? 200 : 422);
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
@@ -572,6 +607,9 @@ const server = Bun.serve({
         const body = (await req.json()) as { status?: string };
         if (!body.status) return json({ error: "status is required" }, 400);
         const result = updateTaskStatus(id, body.status);
+        if (result.ok) {
+          logOperatorAction({ source: "operator", action: "status", message: `Status changed: ${id} -> ${body.status}`, task_id: id });
+        }
         return json(result, result.ok ? 200 : 422);
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
@@ -612,6 +650,12 @@ const server = Bun.serve({
       }
     }
 
+    // GET /api/operator-log?limit=50 — chronological operator activity feed
+    if (url.pathname === "/api/operator-log" && req.method === "GET") {
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      return json(getOperatorLog(limit));
+    }
+
     // ============================================================
     // POST /api/command — operator command bar dispatch (T053)
     // ============================================================
@@ -625,12 +669,15 @@ const server = Bun.serve({
           text?: string;
         };
 
+        logOperatorAction({ source: "operator", action: "command", message: `Command: type=${body.type}${body.taskId ? ` task=${body.taskId}` : ""}${body.issue ? ` issue=${body.issue}` : ""}`, task_id: body.taskId });
+
         if (body.type === "status") {
           try {
             const health = await fetch("http://localhost:8088/health", {
               signal: AbortSignal.timeout(5000),
             });
             const data = await health.json();
+            logOperatorAction({ source: "system", action: "status", message: `Status check: ${JSON.stringify(data).slice(0, 100)}` });
             return json({ type: "status", data });
           } catch {
             return json({
@@ -701,12 +748,16 @@ const server = Bun.serve({
           ]);
           const exitCode = await proc.exited;
           if (exitCode !== 0) {
+            logOperatorAction({ source: "system", action: "error", message: `Free-text dispatch failed: ${issueStderr.trim() || "gh issue create failed"}` });
             return json(
               { type: "dispatched", ok: false, error: issueStderr.trim() || "gh issue create failed" },
               500
             );
           }
-          return json({ type: "dispatched", ok: true, issue_url: issueStdout.trim() });
+          const issueUrl = issueStdout.trim();
+          const issueNum = issueUrl.split("/").pop();
+          logOperatorAction({ source: "system", action: "dispatch", message: `Created GitHub issue #${issueNum} via free-text command — daemon will dispatch within 20s`, issue_number: issueNum ? parseInt(issueNum) : undefined, metadata: { issue_url: issueUrl } });
+          return json({ type: "dispatched", ok: true, issue_url: issueUrl });
         }
 
         return json({ error: `unknown command type: ${body.type}` }, 400);

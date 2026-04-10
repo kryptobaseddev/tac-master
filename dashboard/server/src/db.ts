@@ -41,6 +41,20 @@ export function initDatabase(): void {
       timestamp INTEGER NOT NULL
     );
   `);
+  eventsDb.exec(`
+    CREATE TABLE IF NOT EXISTS operator_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      action TEXT NOT NULL,
+      message TEXT NOT NULL,
+      task_id TEXT,
+      issue_number INTEGER,
+      adw_id TEXT,
+      metadata TEXT
+    );
+  `);
+  eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_oplog_ts ON operator_log(timestamp);")
   eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_events_repo ON events(repo_url);");
   eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_app);");
   eventsDb.exec("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);");
@@ -708,6 +722,64 @@ export function getLessons(limit = 20): Array<{
       .all(limit) as any[];
     return rows;
   } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Operator log — feedback for every operator / system / daemon action
+// ---------------------------------------------------------------------------
+
+export interface OperatorLogEntry {
+  id?: number;
+  timestamp: number;
+  source: string;     // 'operator' | 'system' | 'daemon'
+  action: string;     // 'queue' | 'command' | 'note' | 'dispatch' | 'status' | 'error'
+  message: string;
+  task_id?: string | null;
+  issue_number?: number | null;
+  adw_id?: string | null;
+  metadata?: any;
+}
+
+export function logOperatorAction(entry: Omit<OperatorLogEntry, "id" | "timestamp">): void {
+  try {
+    db().prepare(
+      `INSERT INTO operator_log (timestamp, source, action, message, task_id, issue_number, adw_id, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      Math.floor(Date.now() / 1000),
+      entry.source,
+      entry.action,
+      entry.message,
+      entry.task_id ?? null,
+      entry.issue_number ?? null,
+      entry.adw_id ?? null,
+      entry.metadata != null ? JSON.stringify(entry.metadata) : null,
+    );
+  } catch (e) {
+    console.error("[operator_log] insert failed:", e);
+  }
+}
+
+export function getOperatorLog(limit = 50): OperatorLogEntry[] {
+  try {
+    const rows = db()
+      .prepare(`SELECT * FROM operator_log ORDER BY timestamp DESC LIMIT ?`)
+      .all(limit) as any[];
+    return rows.reverse().map((r) => ({
+      id: r.id,
+      timestamp: r.timestamp,
+      source: r.source,
+      action: r.action,
+      message: r.message,
+      task_id: r.task_id ?? null,
+      issue_number: r.issue_number ?? null,
+      adw_id: r.adw_id ?? null,
+      metadata: r.metadata ? safeParse(r.metadata) : null,
+    }));
+  } catch (e) {
+    console.error("[operator_log] query failed:", e);
     return [];
   }
 }

@@ -22,6 +22,9 @@ import LiveExecutionPanel from "./components/LiveExecutionPanel.vue";
 // Sidebar — CLEO task tree
 import EpicTaskTree from "./components/command-center/EpicTaskTree.vue";
 
+// Operator Log panel
+import OperatorLog from "./components/OperatorLog.vue";
+
 // Phase detail modal (T055)
 import PhaseDetailModal from "./components/PhaseDetailModal.vue";
 
@@ -123,6 +126,7 @@ onMounted(() => {
         @open-logs="activeTab = 'logs'"
       />
       <EpicTaskTree />
+      <OperatorLog />
     </template>
 
     <!-- ── Center main area ───────────────────────────────── -->

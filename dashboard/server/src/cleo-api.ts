@@ -16,6 +16,7 @@
 
 import { existsSync } from "node:fs";
 import { Database } from "bun:sqlite";
+import { logOperatorAction } from "./db";
 
 export interface EpicProgress { total:number; done:number; active:number; pending:number; failed:number; }
 export interface EpicSummary { id:string; title:string; status:string; priority:string; size:string|null; labels:string[]; progress:EpicProgress; pct:number; }
@@ -266,30 +267,77 @@ export function createTask(body:CreateTaskBody):{ok:boolean;task?:TaskDetail;err
 
 /**
  * POST /api/cleo/task/:id/queue
- * Sets task to pending and appends a queue note. Optionally triggers
- * re-dispatch if the task is mapped to a GitHub issue.
+ * Sets task to active, appends a queue note, and creates a GitHub issue with
+ * the 'adw' label so the daemon picks it up within ~20 seconds.
  */
-export async function queueTask(id:string):{ok:boolean;queued:boolean;dispatched:boolean;error?:string} {
-  const row=queryOne<{notes_json:string|null;description:string|null}>(`SELECT notes_json,description FROM tasks WHERE id=?`,[id]);
+export async function queueTask(id:string):{ok:boolean;queued:boolean;dispatched:boolean;issue_url?:string;issue_number?:number;error?:string} {
+  const row=queryOne<{notes_json:string|null;description:string|null;title:string|null;priority:string|null;type:string|null;acceptance_json:string|null}>(`SELECT notes_json,description,title,priority,type,acceptance_json FROM tasks WHERE id=?`,[id]);
   if(!row) return {ok:false,queued:false,dispatched:false,error:"task not found"};
-  // Set status to pending
-  const statusOk=execWrite(`UPDATE tasks SET status='pending', updated_at=? WHERE id=?`,[new Date().toISOString(),id]);
+
+  // 1. Update task status to active and append queue note
+  const statusOk=execWrite(`UPDATE tasks SET status='active', updated_at=? WHERE id=?`,[new Date().toISOString(),id]);
   if(!statusOk) return {ok:false,queued:false,dispatched:false,error:"write failed"};
-  // Append note
   const notes=parseJson<string[]>(row.notes_json,[]);
-  notes.push(`${nowUtc()}: Queued for dispatch by operator`);
+  notes.push(`${nowUtc()}: Queued for dispatch by operator — creating GitHub issue`);
   execWrite(`UPDATE tasks SET notes_json=? WHERE id=?`,[JSON.stringify(notes),id]);
-  // Check for GitHub issue link
-  const allText=[row.description,...notes].filter(Boolean) as string[];
-  const issueNumMatch=allText.join(" ").match(/\bissue[_ #]*#?(\d+)\b/i)||allText.join(" ").match(/#(\d+)\b/);
-  let dispatched=false;
-  if(issueNumMatch) {
-    try {
-      const resp=await fetch("http://10.0.10.22:8088/webhook/github",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"reopened",issue:{number:Number(issueNumMatch[1])}}),signal:AbortSignal.timeout(3000)});
-      dispatched=resp.ok;
-    } catch { dispatched=false; }
+
+  // Log operator action
+  logOperatorAction({ source:"operator", action:"queue", message:`Queued ${id} for dispatch`, task_id:id });
+
+  // 2. Create GitHub issue to trigger the daemon
+  const ghToken=process.env.GH_TOKEN||process.env.GITHUB_PAT||"";
+  const title=`[${id}] ${row.title||id}`;
+  const acceptance=parseJson<string[]>(row.acceptance_json,[]);
+  const acLines=acceptance.length>0?acceptance.map(a=>`- [ ] ${a}`).join("\n"):"";
+  const body=[
+    `**CLEO Task**: ${id}`,
+    `**Priority**: ${row.priority||"medium"}`,
+    `**Type**: ${row.type||"task"}`,
+    ``,
+    row.description||"*(no description)*",
+    ``,
+    ...(acLines?[`**Acceptance Criteria**:`,acLines]:[]),
+  ].join("\n");
+
+  try {
+    const proc=Bun.spawn(
+      ["gh","issue","create","--repo","kryptobaseddev/tac-master","--title",title,"--label","adw","--body",body],
+      { stdout:"pipe", stderr:"pipe", env:{...process.env,GH_TOKEN:ghToken} }
+    );
+    const [issueStdout,issueStderr]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text()]);
+    const exitCode=await proc.exited;
+
+    if(exitCode!==0) {
+      const errMsg=issueStderr.trim()||"gh issue create failed";
+      // Append error note
+      const notesAfterFail=parseJson<string[]>(queryOne<{notes_json:string|null}>(`SELECT notes_json FROM tasks WHERE id=?`,[id])?.notes_json,[]);
+      notesAfterFail.push(`${nowUtc()}: ERROR — could not create GitHub issue: ${errMsg}`);
+      execWrite(`UPDATE tasks SET notes_json=? WHERE id=?`,[JSON.stringify(notesAfterFail),id]);
+      logOperatorAction({ source:"system", action:"error", message:`Failed to create GitHub issue for ${id}: ${errMsg}`, task_id:id });
+      return {ok:false,queued:true,dispatched:false,error:errMsg};
+    }
+
+    const issueUrl=issueStdout.trim();
+    const issueNum=parseInt(issueUrl.split("/").pop()||"0",10)||undefined;
+
+    // Append success note with issue URL
+    const notesAfterSuccess=parseJson<string[]>(queryOne<{notes_json:string|null}>(`SELECT notes_json FROM tasks WHERE id=?`,[id])?.notes_json,[]);
+    notesAfterSuccess.push(`${nowUtc()}: Dispatched as GitHub issue ${issueUrl}`);
+    execWrite(`UPDATE tasks SET notes_json=? WHERE id=?`,[JSON.stringify(notesAfterSuccess),id]);
+
+    logOperatorAction({
+      source:"system", action:"dispatch",
+      message:`Created GitHub issue #${issueNum} for ${id} — daemon will pick up within 20s`,
+      task_id:id, issue_number:issueNum,
+      metadata:{ issue_url:issueUrl },
+    });
+
+    return {ok:true,queued:true,dispatched:true,issue_url:issueUrl,issue_number:issueNum};
+  } catch(e:any) {
+    const errMsg=String(e?.message??e);
+    logOperatorAction({ source:"system", action:"error", message:`Exception creating GitHub issue for ${id}: ${errMsg}`, task_id:id });
+    return {ok:false,queued:true,dispatched:false,error:errMsg};
   }
-  return {ok:true,queued:true,dispatched};
 }
 
 export function getTaskById(id:string):TaskDetail|null {
