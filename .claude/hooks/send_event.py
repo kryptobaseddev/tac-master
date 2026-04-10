@@ -13,8 +13,9 @@ the hook runs in any environment where python3 exists (i.e. everywhere).
 Wired into .claude/settings.json for all 7 hook events. Every invocation:
   1. Reads the hook payload JSON from stdin
   2. Enriches with repo_url, adw_id, phase (derived from cwd / env)
-  3. POSTs to $TAC_DASHBOARD_URL/events (default http://localhost:4000/events)
-  4. Exits 0 no matter what so Claude Code is never blocked
+  3. Detects block_type and extracts tool_name from payload
+  4. POSTs to $TAC_DASHBOARD_URL/events (default http://localhost:4000/events)
+  5. Exits 0 no matter what so Claude Code is never blocked
 
 Never raises. Never writes to stderr unless debug mode. Never interrupts the
 agent — the dashboard is observability, not control-plane.
@@ -105,6 +106,55 @@ def detect_phase() -> str | None:
     return cmd
 
 
+def detect_block_type(event_type: str, payload: dict[str, Any]) -> str:
+    """
+    Detect the block_type from the hook payload.
+
+    For PreToolUse/PostToolUse events: inspect payload for block content:
+      - If payload contains tool_input with 'thinking' key -> 'thinking_block'
+      - If payload contains tool_name -> 'tool_use_block'
+      - Otherwise -> 'hook_lifecycle' (default)
+
+    For other events -> 'hook_lifecycle' (default)
+
+    Returns one of: 'thinking_block', 'tool_use_block', 'text_block', 'hook_lifecycle'
+    """
+    try:
+        if event_type not in ("PreToolUse", "PostToolUse"):
+            return "hook_lifecycle"
+
+        # Check for thinking content in tool_input (some tools are thinking assistants)
+        tool_input = payload.get("tool_input")
+        if isinstance(tool_input, dict):
+            if "thinking" in tool_input or (tool_input.get("type") == "thinking"):
+                return "thinking_block"
+
+        # Check for tool_use (if tool_name exists, it's a tool use block)
+        if "tool_name" in payload:
+            return "tool_use_block"
+
+        # Default for other content types
+        return "hook_lifecycle"
+
+    except Exception as e:
+        _debug(f"Error detecting block_type: {e}")
+        return "hook_lifecycle"
+
+
+def extract_tool_name(payload: dict[str, Any]) -> str | None:
+    """
+    Extract tool_name from the hook payload for fast filtering.
+
+    Returns the tool_name if present, otherwise None.
+    """
+    try:
+        if isinstance(payload, dict):
+            return payload.get("tool_name")
+    except Exception as e:
+        _debug(f"Error extracting tool_name: {e}")
+    return None
+
+
 def read_stdin_payload() -> dict[str, Any]:
     if sys.stdin.isatty():
         return {}
@@ -154,15 +204,24 @@ def main() -> int:
         or "unknown"
     )
 
+    # Detect block_type and extract tool_name from payload
+    block_type = detect_block_type(args.event_type, payload)
+    tool_name = extract_tool_name(payload)
+
     event = {
         "source_app": args.source_app,
         "session_id": session_id,
         "hook_event_type": args.event_type,
+        "block_type": block_type,
         "repo_url": detect_repo_url(),
         "adw_id": detect_adw_id(),
         "phase": detect_phase(),
         "payload": payload,
     }
+
+    # Include tool_name as top-level field if present
+    if tool_name is not None:
+        event["tool_name"] = tool_name
 
     # Optional chat transcript (last ~40 turns)
     if args.add_chat and "transcript_path" in payload:
