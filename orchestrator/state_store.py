@@ -268,6 +268,13 @@ class StateStore:
         with self.conn() as c:
             c.executescript(SCHEMA)
             c.executescript(SCHEMA_V2)
+            # T110 migration: add cleo_task_id to agent_instances for CLEO→GH issue mapping
+            try:
+                c.execute(
+                    "ALTER TABLE agent_instances ADD COLUMN cleo_task_id TEXT"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     @contextmanager
     def conn(self) -> Iterator[sqlite3.Connection]:
@@ -391,6 +398,20 @@ class StateStore:
                 (adw_id,),
             ).fetchone()
             return row["cleo_task_id"] if row else None
+
+    def set_agent_instance_cleo_task_id(
+        self, adw_id: str, cleo_task_id: str
+    ) -> None:
+        """Store cleo_task_id on the agent_instances row(s) for a given adw_id.
+
+        Called after create_issue_from_task creates the GitHub issue so the
+        CLEO task ID → issue mapping is persisted alongside the run.
+        """
+        with self.conn() as c:
+            c.execute(
+                "UPDATE agent_instances SET cleo_task_id=? WHERE adw_id=?",
+                (cleo_task_id, adw_id),
+            )
 
     # ----- phases -----
 

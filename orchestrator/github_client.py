@@ -132,3 +132,39 @@ class GitHubClient:
             log.error("Failed to post comment on %s#%d: %s",
                       repo_url, issue_number, e)
             return False
+
+    def create_issue(
+        self,
+        repo_url: str,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+    ) -> Issue | None:
+        """Create a new GitHub issue and return it as an Issue dataclass.
+
+        Returns None on failure (non-blocking callers should handle this).
+        """
+        owner, repo = self.owner_repo(repo_url)
+        payload: dict[str, Any] = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = labels
+        try:
+            r = self.client.post(
+                f"/repos/{owner}/{repo}/issues",
+                json=payload,
+            )
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            log.error("Failed to create issue on %s: %s", repo_url, e)
+            return None
+        raw = r.json()
+        return Issue(
+            number=raw["number"],
+            title=raw.get("title", ""),
+            body=raw.get("body") or "",
+            state=raw.get("state", "open"),
+            labels=[label["name"] for label in raw.get("labels", [])],
+            comments_count=raw.get("comments", 0),
+            updated_at=raw.get("updated_at", ""),
+            html_url=raw.get("html_url", ""),
+        )
