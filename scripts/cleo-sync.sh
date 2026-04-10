@@ -71,13 +71,16 @@ if [[ -f "$LAST_PUSH_TS_FILE" ]]; then
   LAST_PUSH_MTIME=$(cat "$LAST_PUSH_TS_FILE" 2>/dev/null || echo 0)
 fi
 
+# Checkpoint LXC WAL first so committed writes are in the main DB file
+# (WAL writes don't update the main file mtime until checkpointed)
+ssh_lxc "sqlite3 '$LXC_DB_PATH' 'PRAGMA wal_checkpoint(FULL);' 2>/dev/null || true" 2>/dev/null || true
+
 LXC_MTIME=$(ssh_lxc "stat -c '%Y' '$LXC_DB_PATH' 2>/dev/null || echo 0" 2>/dev/null || echo 0)
 
 if [[ "$LXC_MTIME" -gt "$LAST_PUSH_MTIME" && "$LAST_PUSH_MTIME" -gt "0" ]]; then
   log "LXC has writes since last push (LXC_mtime=${LXC_MTIME} last_push=${LAST_PUSH_MTIME}) — pulling write-back to dev"
-  # WAL checkpoint on LXC first so we get committed state
-  ssh_lxc "sqlite3 '$LXC_DB_PATH' 'PRAGMA wal_checkpoint(FULL);'" 2>/dev/null || true
   # Pull LXC copy back to dev machine (daemon status updates write-back)
+  # WAL was already checkpointed above
   rsync_pull "$LXC_DB_PATH" "${CLEO_DB}.lxc_writeback"
 
   # WAL checkpoint the pulled copy to make it self-contained
