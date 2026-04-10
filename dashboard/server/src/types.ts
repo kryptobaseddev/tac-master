@@ -14,11 +14,55 @@ export interface HookEvent {
   phase?: string; // optional phase label (plan, build, test, review, ...)
 }
 
+// Streaming block types for WebSocket events (T058 spec)
+export interface ThinkingBlockData {
+  adw_id: string;
+  session_id: string;
+  phase: string;
+  thinking: string; // the thinking text content
+  timestamp: number;
+}
+
+export interface ToolUseBlockData {
+  adw_id: string;
+  session_id: string;
+  phase: string;
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  timestamp: number;
+}
+
+export interface TextBlockData {
+  adw_id: string;
+  session_id: string;
+  phase: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface AgentStatusData {
+  adw_id: string;
+  session_id: string;
+  hook_event_type: string; // PreToolUse, PostToolUse, Stop, etc.
+  phase: string;
+  timestamp: number;
+}
+
+export interface HeartbeatData {
+  timestamp: number;
+  active_clients: number;
+}
+
 export type WsMessage =
   | { type: "initial"; data: HookEvent[] }
   | { type: "event"; data: HookEvent }
   | { type: "run_update"; data: RunSummary }
-  | { type: "repo_status"; data: RepoStatus };
+  | { type: "repo_status"; data: RepoStatus }
+  | { type: "thinking_block"; data: ThinkingBlockData }
+  | { type: "tool_use_block"; data: ToolUseBlockData }
+  | { type: "text_block"; data: TextBlockData }
+  | { type: "agent_status"; data: AgentStatusData }
+  | { type: "heartbeat"; data: HeartbeatData };
 
 export interface RunSummary {
   adw_id: string;
