@@ -542,6 +542,7 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
 
     // actions
     initialize,
+    loadInitial,
     selectAgent,
     toggleAutoScroll,
     clearEventStream,
@@ -549,6 +550,7 @@ export const useOrchestratorStore = defineStore("orchestrator", () => {
     upsertRun,
     upsertRepo,
     addHookEvent,
+    hydrateFromInitial,
     addChatMessage,
     sendUserMessage,
     handleUserPromptSubmit,

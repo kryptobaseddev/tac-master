@@ -655,10 +655,85 @@ const server = Bun.serve({
       }
     }
 
-    // GET /api/operator-log?limit=50 — chronological operator activity feed
-    if (url.pathname === "/api/operator-log" && req.method === "GET") {
-      const limit = Number(url.searchParams.get("limit") ?? 50);
-      return json(getOperatorLog(limit));
+    // ============================================================
+    // Chat endpoints — human-to-orchestrator conversation (T073)
+    // ============================================================
+
+    // POST /api/chat/send — accept user message and broadcast to WebSocket
+    // Body: { message: string, orchestrator_agent_id: string }
+    // Fire-and-forget: returns 200 immediately; content delivered via WS
+    if (url.pathname === "/api/chat/send" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as {
+          message?: string;
+          orchestrator_agent_id?: string;
+        };
+
+        if (!body.message?.trim()) {
+          return json({ error: "message is required" }, 400);
+        }
+        if (!body.orchestrator_agent_id?.trim()) {
+          return json({ error: "orchestrator_agent_id is required" }, 400);
+        }
+
+        // Insert user message into database
+        const now = Math.floor(Date.now() / 1000);
+        const userMsg = insertChatMessage({
+          orchestrator_agent_id: body.orchestrator_agent_id,
+          sender_type: "user",
+          receiver_type: "orchestrator",
+          message: body.message.trim(),
+          metadata: {},
+          created_at: now,
+          updated_at: now,
+        });
+
+        // Broadcast user message via WebSocket immediately
+        wsManager.broadcast({
+          type: "orchestrator_chat",
+          message: userMsg,
+        });
+
+        // Broadcast typing indicator
+        wsManager.broadcast({
+          type: "chat_typing",
+          orchestrator_agent_id: body.orchestrator_agent_id,
+          is_typing: true,
+        });
+
+        // TODO: trigger OrchestratorBridge.sendMessage() asynchronously
+        // For now, this is fire-and-forget. The orchestrator bridge will be
+        // responsible for reading the message and streaming response blocks
+        // back through the existing WebSocket pipeline.
+
+        return json({ ok: true, message_id: userMsg.id }, 200);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // POST /api/chat/history — retrieve chat history for an orchestrator session
+    // Body: { orchestrator_agent_id: string, limit?: number }
+    // Returns: { messages: ChatMessage[], turn_count: number }
+    if (url.pathname === "/api/chat/history" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as {
+          orchestrator_agent_id?: string;
+          limit?: number;
+        };
+
+        if (!body.orchestrator_agent_id?.trim()) {
+          return json({ error: "orchestrator_agent_id is required" }, 400);
+        }
+
+        const limit = body.limit ?? 50;
+        const messages = getChatHistory(body.orchestrator_agent_id, limit);
+        const turn_count = getTurnCount(body.orchestrator_agent_id);
+
+        return json({ messages, turn_count }, 200);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
     }
 
     // ============================================================

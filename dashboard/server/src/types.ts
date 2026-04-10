@@ -53,6 +53,18 @@ export interface HeartbeatData {
   active_clients: number;
 }
 
+export interface ChatMessage {
+  id: string;
+  orchestrator_agent_id: string;
+  sender_type: "user" | "orchestrator";
+  receiver_type: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  summary?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export type WsMessage =
   | { type: "initial"; data: HookEvent[] }
   | { type: "event"; data: HookEvent }
@@ -62,7 +74,10 @@ export type WsMessage =
   | { type: "tool_use_block"; data: ToolUseBlockData }
   | { type: "text_block"; data: TextBlockData }
   | { type: "agent_status"; data: AgentStatusData }
-  | { type: "heartbeat"; data: HeartbeatData };
+  | { type: "heartbeat"; data: HeartbeatData }
+  | { type: "orchestrator_chat"; message: ChatMessage }
+  | { type: "chat_typing"; orchestrator_agent_id: string; is_typing: boolean }
+  | { type: "chat_stream"; chunk: string; is_complete: boolean };
 
 export interface RunSummary {
   adw_id: string;

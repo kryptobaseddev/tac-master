@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { useOrchestratorStore } from "./stores/orchestratorStore";
+// T071 / T092: WebSocket composable — connects on mount, routes all WsMessage
+// types to the store, and handles exponential-backoff reconnect automatically.
+import { useWebSocket } from "./composables/useWebSocket";
 
 // Layout shell
 import CommandCenterLayout from "./components/CommandCenterLayout.vue";
@@ -41,6 +44,15 @@ import ConfigPage from "./components/ConfigPage.vue";
 
 // ── Store ─────────────────────────────────────────────────────────
 const store = useOrchestratorStore();
+
+// ── WebSocket (T071/T092) ─────────────────────────────────────────
+// useWebSocket connects on mount, routes all WsMessage types to the store,
+// and automatically reconnects with exponential backoff. The composable
+// also fetches GET /events/recent after each successful reconnect.
+// Store state (isConnected, reconnectCount) is exposed to the template
+// via the store itself for the StatusBar; the composable keeps its own
+// reactive refs as the authoritative source for connection health.
+const { isConnected: wsConnected, connectionStatus, reconnectCount } = useWebSocket();
 
 // ── Phase detail modal state (T055) ──────────────────────────────
 const phaseModalVisible = ref(false);
@@ -90,9 +102,12 @@ function handleRepoSelect(url: string) {
   }
 }
 
-// ── Initialize WebSocket + fetch ──────────────────────────────────
+// ── Initialize: HTTP bootstrap only (WS handled by useWebSocket above) ────
+// store.loadInitial() fetches /api/runs, /api/repos, /events/recent over HTTP.
+// store.initialize() would also call the old connectWebSocket() which is now
+// superseded by the useWebSocket composable wired above.
 onMounted(() => {
-  store.initialize();
+  store.loadInitial();
 
   // Default currentRepoUrl to first repo once data arrives
   const unsub = store.$subscribe(() => {
