@@ -46,17 +46,17 @@
           >
             <button
               class="view-mode-btn"
-              :class="{ active: store.viewMode === 'logs' }"
-              @click="store.setViewMode('logs')"
+              :class="{ active: store.viewMode === 'dashboard' }"
+              @click="store.setViewMode('dashboard')"
             >
-              LOGS
+              DASHBOARD
             </button>
             <button
               class="view-mode-btn"
-              :class="{ active: store.viewMode === 'adws' }"
-              @click="store.setViewMode('adws')"
+              :class="{ active: store.viewMode === 'swimlanes' }"
+              @click="store.setViewMode('swimlanes')"
             >
-              ADWS
+              SWIMLANES
               <span v-if="store.runningAdws.length > 0" class="adw-badge">
                 {{ store.runningAdws.length }}
               </span>
