@@ -31,18 +31,24 @@
     <!-- Empty / no-selection state -->
     <div v-if="!selectedAdwId" class="lep-empty">
       <div class="lep-empty-icon">◈</div>
-      <p>Select an agent run to view its execution stream.</p>
+      <p>No agent runs found. Start a workflow to see live execution.</p>
     </div>
 
     <!-- Phase selector when multiple phases exist -->
     <div v-else-if="availablePhases.length > 1" class="lep-phase-bar">
+      <div class="lep-phase-section-header">
+        <span class="lep-phase-section-label">PIPELINE PHASES</span>
+        <span class="lep-phase-section-divider"></span>
+      </div>
       <button
         v-for="ph in availablePhases"
         :key="ph"
         class="lep-phase-btn"
         :class="{ active: ph === activePhase }"
+        :title="ph"
+        :style="phaseChipStyle(ph, ph === activePhase)"
         @click="selectPhase(ph)"
-      >{{ ph }}</button>
+      >{{ formatPhaseName(ph) }}</button>
     </div>
 
     <!-- Error state -->
@@ -138,7 +144,7 @@
  * Events are merged chronologically by timestamp.
  */
 
-import { ref, computed, watch, nextTick } from "vue";
+import { ref, computed, watch, nextTick, onMounted } from "vue";
 import { useOrchestratorStore } from "../stores/orchestratorStore";
 import type { EventStreamEntry } from "../types";
 
@@ -168,8 +174,10 @@ const API_BASE = "";
 
 const store = useOrchestratorStore();
 
-// The adw_id of the currently selected agent
-const selectedAdwId = computed<string | null>(() => store.selectedAgent?.id ?? null);
+// The adw_id of the currently selected agent, falling back to most recent
+const selectedAdwId = computed<string | null>(
+  () => store.selectedAgent?.id ?? store.recentAgents[0]?.id ?? null,
+);
 
 // Hook events for the selected agent (from existing event stream)
 const hookEvents = computed<EventStreamEntry[]>(() => {
@@ -196,6 +204,61 @@ async function fetchPhases(adwId: string): Promise<void> {
   } catch {
     availablePhases.value = [];
   }
+}
+
+// ─── Phase name formatting ──────────────────────────────────────────────────
+
+/**
+ * Format a raw pipeline phase name into a human-readable label.
+ * Examples:
+ *   test_resolver_iter1_0      → "Test Resolver"
+ *   sdlc_implementor_committer → "SDLC Implementor Committer"
+ *   kpi_tracker                → "KPI Tracker"
+ *   issue_classifier           → "Issue Classifier"
+ *   branch_generator           → "Branch Generator"
+ */
+function formatPhaseName(raw: string): string {
+  return raw
+    .replace(/_iter\d+_\d+$/, '')   // strip iter suffixes like _iter1_0
+    .replace(/_/g, ' ')              // underscores to spaces
+    .replace(/\b\w/g, (c) => c.toUpperCase()) // capitalize each word
+    .replace(/^Sdlc /, 'SDLC ')     // preserve known acronyms
+    .replace(/^Kpi /, 'KPI ')
+    .replace(/^Pr /, 'PR ')
+    .trim();
+}
+
+/**
+ * Map a raw phase name to a color for visual categorization.
+ * These are phase types from the PITER pipeline — not agents.
+ */
+function phaseColor(raw: string): string {
+  if (raw.includes('classify') || raw.includes('issue_classifier')) return '#4488ff'; // blue
+  if (raw.includes('plan') || raw.includes('sdlc_planner')) return '#aa66ff';         // purple
+  if (raw.includes('build') || raw.includes('implementor')) return '#00ff66';          // green
+  if (raw.includes('test') || raw.includes('resolver') || raw.includes('runner')) return '#ffcc00'; // yellow
+  if (raw.includes('review')) return '#ff8c00';                                         // orange
+  if (raw.includes('document')) return '#00cccc';                                       // teal
+  if (raw.includes('ship') || raw.includes('pr_creator')) return '#00ffcc';            // cyan
+  if (raw.includes('reflect') || raw.includes('kpi')) return '#888888';                // gray
+  return '#666666'; // default
+}
+
+/**
+ * Compute inline style for a phase chip: border-color + subtle background tint.
+ * Active chip is full-opacity; inactive chips are dimmed.
+ */
+function phaseChipStyle(raw: string, isActive: boolean): Record<string, string> {
+  const color = phaseColor(raw);
+  const opacity = isActive ? '1' : '0.45';
+  return {
+    borderColor: color,
+    background: isActive
+      ? `${color}22`   // ~13% opacity fill when active
+      : `${color}0a`,  // ~4% opacity fill when inactive
+    color: isActive ? color : `${color}aa`,
+    opacity,
+  };
 }
 
 function selectPhase(phase: string): void {
@@ -329,23 +392,39 @@ function fmtTs(ts: string | null | undefined): string {
 
 // ─── Watchers: react to agent selection and phase changes ───────────────────
 
-watch(selectedAdwId, async (adwId) => {
+async function loadForAdwId(adwId: string): Promise<void> {
   streamEvents.value = [];
   availablePhases.value = [];
   activePhase.value = "";
   error.value = null;
 
-  if (!adwId) return;
-
   await fetchPhases(adwId);
   if (activePhase.value) {
     await fetchStreamEvents(adwId, activePhase.value);
   }
+
+  // Fallback: if stream returned nothing, hook events from the store's
+  // eventStreamEntries will appear automatically via the hookEvents computed.
+}
+
+watch(selectedAdwId, async (adwId) => {
+  if (!adwId) return;
+  await loadForAdwId(adwId);
 });
 
 watch(activePhase, async (phase) => {
   if (!selectedAdwId.value || !phase) return;
   await fetchStreamEvents(selectedAdwId.value, phase);
+});
+
+// On mount: if selectedAdwId is already populated (from store initial load),
+// the watch above won't fire because the value was set before the watcher.
+// Trigger load explicitly.
+onMounted(async () => {
+  const adwId = selectedAdwId.value;
+  if (adwId) {
+    await loadForAdwId(adwId);
+  }
 });
 </script>
 
@@ -414,6 +493,32 @@ watch(activePhase, async (phase) => {
   flex-shrink: 0;
 }
 
+/* "PIPELINE PHASES" section header — full-width row above chips */
+.lep-phase-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.lep-phase-section-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #4b5563;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.lep-phase-section-divider {
+  flex: 1;
+  height: 1px;
+  background: #1f2937;
+  border: none;
+}
+
 .lep-phase-btn {
   background: transparent;
   border: 1px solid #2d3748;
@@ -425,18 +530,12 @@ watch(activePhase, async (phase) => {
   color: #6b7280;
   cursor: pointer;
   letter-spacing: 0.03em;
-  transition: all 0.12s;
+  transition: all 0.15s ease;
 }
 
 .lep-phase-btn:hover {
-  color: #d1d5db;
-  border-color: #4b5563;
-}
-
-.lep-phase-btn.active {
-  background: rgba(168, 85, 247, 0.12);
-  border-color: #a855f7;
-  color: #c084fc;
+  opacity: 1 !important;
+  filter: brightness(1.25);
 }
 
 /* ─── Error ───────────────────────────────────────────── */
