@@ -27,6 +27,7 @@ parallel execution without interference.
 import sys
 import os
 import json
+import shutil
 from dotenv import load_dotenv
 
 from adw_modules.state import ADWState
@@ -265,13 +266,36 @@ def main():
     # Check if file exists in worktree
     worktree_plan_path = os.path.join(worktree_path, plan_file_path)
     if not os.path.exists(worktree_plan_path):
-        error = f"Plan file does not exist in worktree: {plan_file_path}"
-        logger.error(error)
-        make_issue_comment(
-            issue_number,
-            format_issue_message(adw_id, "ops", f"❌ {error}"),
-        )
-        sys.exit(1)
+        # Fallback: the planner may have written to the base-clone's specs/ instead
+        # of the worktree's specs/ (e.g. if it resolved the project root from
+        # .claude/commands/ ancestry rather than cwd).  Copy the file into the
+        # worktree so all subsequent stages find it in the expected location.
+        base_clone_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_clone_plan_path = os.path.join(base_clone_path, plan_file_path)
+        if os.path.exists(base_clone_plan_path):
+            logger.warning(
+                f"Plan file found in base clone instead of worktree — copying to worktree: "
+                f"{base_clone_plan_path} -> {worktree_plan_path}"
+            )
+            make_issue_comment(
+                issue_number,
+                format_issue_message(
+                    adw_id, "ops",
+                    f"⚠️ Plan file was written to base clone instead of worktree. "
+                    f"Copying to worktree for subsequent stages."
+                ),
+            )
+            os.makedirs(os.path.dirname(worktree_plan_path), exist_ok=True)
+            shutil.copy2(base_clone_plan_path, worktree_plan_path)
+            logger.info(f"Copied plan file to worktree: {worktree_plan_path}")
+        else:
+            error = f"Plan file does not exist in worktree or base clone: {plan_file_path}"
+            logger.error(error)
+            make_issue_comment(
+                issue_number,
+                format_issue_message(adw_id, "ops", f"❌ {error}"),
+            )
+            sys.exit(1)
 
     state.update(plan_file=plan_file_path)
     state.save("adw_plan_iso")

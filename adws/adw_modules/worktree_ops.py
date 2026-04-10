@@ -37,11 +37,35 @@ def create_worktree(adw_id: str, branch_name: str, logger: logging.Logger) -> Tu
     # Construct worktree path
     worktree_path = os.path.join(trees_dir, adw_id)
     
-    # Check if worktree already exists
+    # Check if worktree directory already exists
     if os.path.exists(worktree_path):
-        logger.warning(f"Worktree already exists at {worktree_path}")
-        return worktree_path, None
-    
+        # Verify it is a valid git worktree — not just a stale directory from a
+        # prior aborted run.  If the directory exists but git does not know about
+        # it (i.e. it was never registered or was pruned), the planner will run
+        # with cwd=worktree_path but the worktree will be missing tracked files
+        # (specs/, .claude/commands/, etc.) that only a real git-managed worktree
+        # contains.  The spec then gets written to the base clone instead.
+        wt_list = subprocess.run(
+            ["git", "worktree", "list"],
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+        )
+        if worktree_path in wt_list.stdout:
+            logger.info(f"Using existing valid git worktree at {worktree_path}")
+            return worktree_path, None
+        # Stale directory — remove it so git worktree add can proceed cleanly.
+        logger.warning(
+            f"Stale worktree directory found at {worktree_path} (not registered "
+            f"with git). Removing and re-creating as a proper git worktree."
+        )
+        try:
+            shutil.rmtree(worktree_path)
+        except Exception as e:
+            error_msg = f"Failed to remove stale worktree directory {worktree_path}: {e}"
+            logger.error(error_msg)
+            return None, error_msg
+
     # First, fetch latest changes from origin
     logger.info("Fetching latest changes from origin")
     fetch_result = subprocess.run(
