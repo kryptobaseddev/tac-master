@@ -54,7 +54,8 @@ function getDb(): Database|null {
 function getDbWrite(): Database|null {
   const path=resolveDbPath(); if (!path) return null;
   if (_dbWrite && _dbWritePath===path) return _dbWrite;
-  // Open without readonly flag — default is read-write
+  // Open without readonly flag — default is read-write.
+  // TODO: T035 will add bidirectional sync. Writes currently go to LXC copy only.
   try { if (_dbWrite) { try{_dbWrite.close();}catch{} } _dbWrite=new Database(path); _dbWritePath=path; console.log(`[cleo-api] opened write handle ${path}`); }
   catch(e) { console.error("[cleo-api] DB write open failed:",e); _dbWrite=null; _dbWritePath=null; }
   return _dbWrite;

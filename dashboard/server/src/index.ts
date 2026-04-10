@@ -642,6 +642,9 @@ const server = Bun.serve({
         if (body.type === "freetext") {
           if (!body.text?.trim()) return json({ error: "text required" }, 400);
           const title = `Operator: ${body.text.trim().slice(0, 60)}`;
+          // Pass GH_TOKEN explicitly — identity.env exports GITHUB_PAT but gh CLI
+          // expects GH_TOKEN. We map whichever is set so the spawn env is self-contained.
+          const ghToken = process.env.GH_TOKEN || process.env.GITHUB_PAT || "";
           const proc = Bun.spawn(
             [
               "gh", "issue", "create",
@@ -650,7 +653,11 @@ const server = Bun.serve({
               "--label", "adw",
               "--body", body.text.trim(),
             ],
-            { stdout: "pipe", stderr: "pipe" }
+            {
+              stdout: "pipe",
+              stderr: "pipe",
+              env: { ...process.env, GH_TOKEN: ghToken },
+            }
           );
           const [issueStdout, issueStderr] = await Promise.all([
             new Response(proc.stdout).text(),
