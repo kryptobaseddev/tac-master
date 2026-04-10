@@ -37,6 +37,9 @@ import PhaseDetailModal from "./components/PhaseDetailModal.vue";
 // System Logs viewer
 import SystemLogs from "./components/SystemLogs.vue";
 
+// T126: ADW Swimlanes view
+import AdwSwimlanes from "./components/AdwSwimlanes.vue";
+
 // T053: Operator command bar + toast notifications
 import CommandBar from "./components/CommandBar.vue";
 import Toast from "./components/Toast.vue";
@@ -120,6 +123,9 @@ function handleRepoSelect(url: string) {
 onMounted(() => {
   store.loadInitial();
 
+  // T126: Fetch ADWs for swimlanes view on mount
+  store.fetchAdws();
+
   // Default currentRepoUrl to first repo once data arrives
   const unsub = store.$subscribe(() => {
     if (!currentRepoUrl.value && store.repos.length > 0) {
@@ -166,15 +172,43 @@ onMounted(() => {
 
     <!-- ── Center main area ───────────────────────────────── -->
     <template #main>
-      <!-- Dashboard view: panels -->
+      <!-- Dashboard view: panels or swimlanes -->
       <template v-if="activeTab === 'dashboard'">
-        <PipelineFlow @phase-click="openPhaseModal" />
-        <CostDashboard />
-        <ActiveAgentsPanel />
-        <div class="dep-graph-panel">
-          <DependencyGraph />
+        <!-- T130: View mode toggle (Dashboard / Swimlanes) -->
+        <div class="main-header">
+          <div class="view-mode-toggle">
+            <button
+              class="view-mode-btn"
+              :class="{ 'view-mode-btn--active': store.viewMode === 'dashboard' }"
+              @click="store.setViewMode('dashboard')"
+            >
+              Dashboard
+            </button>
+            <button
+              class="view-mode-btn"
+              :class="{ 'view-mode-btn--active': store.viewMode === 'swimlanes' }"
+              @click="store.setViewMode('swimlanes')"
+            >
+              Swimlanes
+            </button>
+          </div>
         </div>
-        <IssueDetails />
+
+        <!-- Dashboard panels (default view) -->
+        <div v-if="store.viewMode === 'dashboard'" class="dashboard-panels">
+          <PipelineFlow @phase-click="openPhaseModal" />
+          <CostDashboard />
+          <ActiveAgentsPanel />
+          <div class="dep-graph-panel">
+            <DependencyGraph />
+          </div>
+          <IssueDetails />
+        </div>
+
+        <!-- Swimlanes view (full height) -->
+        <div v-else-if="store.viewMode === 'swimlanes'" class="swimlanes-container">
+          <AdwSwimlanes />
+        </div>
       </template>
 
       <!-- System logs page -->
@@ -320,6 +354,66 @@ html, body, #app {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+/* Main header with view mode toggle (T130) */
+.main-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* View mode toggle buttons */
+.view-mode-toggle {
+  display: flex;
+  gap: 0;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px;
+  height: 28px;
+}
+
+.view-mode-btn {
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.view-mode-btn:hover {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.view-mode-btn--active {
+  background: rgba(0, 255, 204, 0.1);
+  color: #00ffcc;
+}
+
+/* Dashboard panels container */
+.dashboard-panels {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+}
+
+/* Swimlanes container — full height */
+.swimlanes-container {
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 </style>
