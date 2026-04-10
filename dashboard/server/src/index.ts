@@ -44,7 +44,7 @@ import {
   type RepoEntry,
 } from "./config";
 import type { HookEvent, WsMessage } from "./types";
-import { getEpics, getTasksByParent, getTaskById, getCleoStats, addTaskNote, updateTaskStatus, createTask, queueTask, type CreateTaskBody } from "./cleo-api";
+import { getEpics, getTasksByParent, getTaskById, getCleoStats, addTaskNote, updateTaskStatus, createTask, queueTask, getTaskLinks, type CreateTaskBody } from "./cleo-api";
 import { readFile } from "node:fs/promises";
 import { parseStreamFile, resolveStreamPath, listStreamPhases } from "./stream-parser";
 
@@ -636,6 +636,18 @@ const server = Bun.serve({
         const task = getTaskById(id);
         if (!task) return json({ error: "not found" }, 404);
         return json(task);
+      } catch (e: any) {
+        return json({ error: String(e?.message ?? e) }, 500);
+      }
+    }
+
+    // GET /api/cleo/task/:id/links — external links for a task (GitHub issues, PRs, etc.)
+    if (url.pathname.startsWith("/api/cleo/task/") && url.pathname.endsWith("/links") && req.method === "GET") {
+      const id = url.pathname.replace("/api/cleo/task/", "").replace("/links", "");
+      if (!id) return json({ error: "task id required" }, 400);
+      try {
+        const links = getTaskLinks(id);
+        return json({ links });
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
       }

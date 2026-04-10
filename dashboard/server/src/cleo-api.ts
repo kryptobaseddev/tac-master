@@ -15,6 +15,7 @@
  */
 
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { logOperatorAction } from "./db";
 
@@ -27,6 +28,18 @@ export interface TaskSummary {
   depends?:string[];
 }
 
+export interface ExternalTaskLink {
+  id: string;
+  provider_id: string;
+  external_id: string;
+  external_url: string|null;
+  external_title: string|null;
+  link_type: string;
+  sync_direction: string;
+  linked_at: string;
+  last_sync_at: string|null;
+}
+
 export interface TaskDetail extends TaskSummary {
   description: string|null;
   notes: string[];
@@ -35,6 +48,7 @@ export interface TaskDetail extends TaskSummary {
   children: {id:string;title:string;status:string}[];
   github_url: string|null;
   assignee: string|null;
+  external_links?: ExternalTaskLink[];
 }
 
 const DB_CANDIDATES = [process.env.CLEO_TASKS_DB,"/srv/tac-master/state/cleo-tasks.db","/mnt/projects/agentic-engineer/.cleo/tasks.db"].filter(Boolean) as string[];
@@ -266,6 +280,18 @@ export function createTask(body:CreateTaskBody):{ok:boolean;task?:TaskDetail;err
 }
 
 /**
+ * GET /api/cleo/task/:id/links
+ * Returns all external links for a task (GitHub issues, PRs, etc.)
+ */
+export function getTaskLinks(taskId: string): ExternalTaskLink[] {
+  const rows = query<ExternalTaskLink>(
+    `SELECT id, provider_id, external_id, external_url, external_title, link_type, sync_direction, linked_at, last_sync_at FROM external_task_links WHERE task_id = ? ORDER BY linked_at DESC`,
+    [taskId]
+  );
+  return rows ?? [];
+}
+
+/**
  * POST /api/cleo/task/:id/queue
  * Sets task to active, appends a queue note, and creates a GitHub issue with
  * the 'adw' label so the daemon picks it up within ~20 seconds.
@@ -320,6 +346,19 @@ export async function queueTask(id:string):{ok:boolean;queued:boolean;dispatched
     const issueUrl=issueStdout.trim();
     const issueNum=parseInt(issueUrl.split("/").pop()||"0",10)||undefined;
 
+    // Write external_task_links record for bidirectional sync
+    if (issueNum) {
+      const linkId=randomUUID();
+      const externalId=`kryptobaseddev/tac-master#${issueNum}`;
+      const linkOk=execWrite(
+        `INSERT OR REPLACE INTO external_task_links (id, task_id, provider_id, external_id, external_url, external_title, link_type, sync_direction, linked_at) VALUES (?, ?, 'github', ?, ?, ?, 'dispatch', 'bidirectional', datetime('now'))`,
+        [linkId, id, externalId, issueUrl, row.title || id]
+      );
+      if (!linkOk) {
+        console.warn(`[cleo-api] Failed to write external_task_links for ${id} → ${externalId}`);
+      }
+    }
+
     // Append success note with issue URL
     const notesAfterSuccess=parseJson<string[]>(queryOne<{notes_json:string|null}>(`SELECT notes_json FROM tasks WHERE id=?`,[id])?.notes_json,[]);
     notesAfterSuccess.push(`${nowUtc()}: Dispatched as GitHub issue ${issueUrl}`);
@@ -356,6 +395,8 @@ export function getTaskById(id:string):TaskDetail|null {
   // Extract GitHub URL from description + notes
   const allText=[row.description as string|null,...notes].filter(Boolean) as string[];
   const github_url=extractGithubUrl(allText);
+  // Get external links
+  const external_links=getTaskLinks(id);
   return {
     ...base,
     description:row.description?String(row.description):null,
@@ -365,5 +406,6 @@ export function getTaskById(id:string):TaskDetail|null {
     children,
     github_url,
     assignee:row.assignee?String(row.assignee):null,
+    external_links,
   };
 }
