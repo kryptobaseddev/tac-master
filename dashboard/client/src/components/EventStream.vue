@@ -94,9 +94,10 @@ import type { EventStreamEntry } from "../types";
 // Store
 const store = useOrchestratorStore();
 
-// Get events from store
+// Get events from store (full array, not pre-filtered)
+// The useEventStreamFilter composable handles agent filtering via activeAgentFilters
 const events: ComputedRef<EventStreamEntry[]> = computed(
-  () => store.filteredEventStream
+  () => store.eventStreamEntries
 );
 
 // Use filter composable (without autoScroll, which is now in store)
