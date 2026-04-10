@@ -14,6 +14,7 @@ import StatusBar from "./components/StatusBar.vue";
 import ActiveAgentsPanel from "./components/ActiveAgentsPanel.vue";
 import PipelineFlow from "./components/PipelineFlow.vue";
 import IssueDetails from "./components/IssueDetails.vue";
+import DependencyGraph from "./components/DependencyGraph.vue";
 
 // Right panel
 import LiveExecutionPanel from "./components/LiveExecutionPanel.vue";
@@ -131,6 +132,9 @@ onMounted(() => {
         <ActiveAgentsPanel />
         <PipelineFlow @phase-click="openPhaseModal" />
         <IssueDetails />
+        <div class="dep-graph-panel">
+          <DependencyGraph />
+        </div>
       </template>
 
       <!-- System logs page -->
@@ -194,5 +198,17 @@ html, body, #app {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+}
+
+/* Task dependency graph panel — fills remaining center space */
+.dep-graph-panel {
+  flex: 1;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0d0f1a;
 }
 </style>

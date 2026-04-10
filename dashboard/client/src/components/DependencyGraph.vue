@@ -1,25 +1,13 @@
 <template>
   <div class="dep-graph-wrap">
-    <!-- Mode toggle -->
-    <div class="dep-graph-toolbar">
-      <button
-        class="dep-mode-btn"
-        :class="{ 'dep-mode-active': mode === 'task' }"
-        :disabled="!hasEpic"
-        @click="mode = 'task'"
-        title="Show task dependency graph for selected epic"
-      >TASK DEPS</button>
-      <span class="dep-mode-sep">|</span>
-      <button
-        class="dep-mode-btn"
-        :class="{ 'dep-mode-active': mode === 'pipeline' }"
-        @click="mode = 'pipeline'"
-        title="Show pipeline phase flow for selected run"
-      >PIPELINE FLOW</button>
+    <!-- Header -->
+    <div class="dep-graph-header">
+      <span class="dep-graph-title">TASK DEPENDENCIES</span>
+      <span v-if="epicId" class="dep-graph-epic-tag">{{ epicId }}</span>
     </div>
 
-    <!-- Task dependency graph -->
-    <div v-if="mode === 'task'" class="dep-graph-svg-area">
+    <!-- Task dependency graph (always task-deps mode) -->
+    <div class="dep-graph-svg-area">
       <div v-if="!hasEpic" class="dep-graph-empty">
         <span class="dep-empty-icon">&#9671;</span>
         <span class="dep-empty-hint">Select an epic in the task tree to view dependency graph</span>
@@ -36,6 +24,7 @@
           :viewBox="`0 0 ${svgWidth} ${svgHeight}`"
           :width="svgWidth"
           :height="svgHeight"
+          preserveAspectRatio="xMidYMid meet"
           class="dep-svg"
           xmlns="http://www.w3.org/2000/svg"
         >
@@ -135,153 +124,48 @@
         </svg>
       </div>
     </div>
-
-    <!-- Pipeline phase flow graph -->
-    <div v-else class="dep-graph-svg-area">
-      <div v-if="!hasRun" class="dep-graph-empty">
-        <span class="dep-empty-icon">&#9671;</span>
-        <span class="dep-empty-hint">Select a run to view pipeline flow</span>
-      </div>
-      <div v-else class="dep-svg-container">
-        <svg
-          :viewBox="`0 0 ${pipelineSvgWidth} ${pipelineSvgHeight}`"
-          :width="pipelineSvgWidth"
-          :height="pipelineSvgHeight"
-          class="dep-svg"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <defs>
-            <marker id="pipe-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-              <polygon points="0 0, 8 3, 0 6" fill="#374151" />
-            </marker>
-            <marker id="pipe-arrow-done" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-              <polygon points="0 0, 8 3, 0 6" :fill="COLORS.done" />
-            </marker>
-            <marker id="pipe-arrow-active" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-              <polygon points="0 0, 8 3, 0 6" :fill="COLORS.active" />
-            </marker>
-          </defs>
-
-          <!-- Phase connectors -->
-          <g>
-            <line
-              v-for="(conn, i) in pipelineConnectors"
-              :key="`pconn-${i}`"
-              :x1="conn.x1"
-              :y1="conn.y1"
-              :x2="conn.x2"
-              :y2="conn.y2"
-              :stroke="conn.color"
-              stroke-width="1.5"
-              :marker-end="conn.marker"
-            />
-          </g>
-
-          <!-- Phase nodes -->
-          <g>
-            <g
-              v-for="phase in pipelinePhaseNodes"
-              :key="phase.key"
-              :transform="`translate(${phase.x}, ${phase.y})`"
-              class="dep-node"
-              @mouseenter="hoveredPhase = phase.key"
-              @mouseleave="hoveredPhase = null"
-            >
-              <rect
-                :width="PHASE_NODE_W"
-                :height="PHASE_NODE_H"
-                rx="6"
-                :fill="phaseNodeFill(phase.status)"
-                :stroke="phaseNodeStroke(phase.status)"
-                stroke-width="1.5"
-                :opacity="hoveredPhase === phase.key ? 1 : 0.9"
-              />
-              <!-- Status icon area -->
-              <g :transform="`translate(${PHASE_NODE_W / 2}, 18)`">
-                <!-- Completed checkmark -->
-                <g v-if="phase.status === 'completed'">
-                  <polyline
-                    points="-5,0 -2,4 5,-4"
-                    fill="none"
-                    :stroke="COLORS.done"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </g>
-                <!-- Failed X -->
-                <g v-else-if="phase.status === 'failed'">
-                  <line x1="-4" y1="-4" x2="4" y2="4" :stroke="COLORS.blocked" stroke-width="2" stroke-linecap="round" />
-                  <line x1="4" y1="-4" x2="-4" y2="4" :stroke="COLORS.blocked" stroke-width="2" stroke-linecap="round" />
-                </g>
-                <!-- Active spinning dot -->
-                <circle v-else-if="phase.status === 'active'" r="4" :fill="COLORS.active" opacity="0.9">
-                  <animate attributeName="opacity" values="0.9;0.4;0.9" dur="1.5s" repeatCount="indefinite" />
-                </circle>
-                <!-- Pending empty circle -->
-                <circle v-else r="4" fill="none" stroke="#374151" stroke-width="1.5" />
-              </g>
-              <!-- Phase label -->
-              <text
-                :x="PHASE_NODE_W / 2"
-                y="35"
-                text-anchor="middle"
-                fill="#9ca3af"
-                font-family="ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace"
-                font-size="8"
-                font-weight="700"
-                letter-spacing="0.06em"
-              >{{ phase.label.toUpperCase() }}</text>
-            </g>
-          </g>
-        </svg>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * DependencyGraph — SVG-based directed graph renderer for two modes:
- *   1. TASK DEPS:    shows tasks under a selected epic as nodes with dependency edges
- *   2. PIPELINE FLOW: shows the 8 PITER phases as a horizontal flow with status icons
+ * DependencyGraph — SVG-based directed graph renderer for task dependencies.
  *
- * No external graph libraries — pure SVG + Vue reactivity.
+ * Shows tasks under a selected epic as nodes with dependency edges.
+ * Layout left-to-right by wave (Wave 0 leftmost, Wave N rightmost).
+ * Node color by status (green=done, cyan=active, gray=pending, red=blocked).
+ * Clicking a node opens TaskDetailModal.
+ *
+ * The selected epic is driven by cleoStore.selectedEpicId (set when user
+ * expands an epic in EpicTaskTree) or the epicId prop.
+ *
+ * Pipeline Flow mode has been removed — PipelineFlow.vue handles phase
+ * visualization exclusively.
  *
  * @task T054
  * @epic T051
  */
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch } from "vue";
 import { useCleoStore } from "../stores/cleoStore";
-import { useOrchestratorStore } from "../stores/orchestratorStore";
-import type { RunSummary } from "../types";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 const props = withDefaults(
   defineProps<{
-    run?: RunSummary | null;
     epicId?: string | null;
   }>(),
-  { run: null, epicId: null },
+  { epicId: null },
 );
 
 // ── Stores ────────────────────────────────────────────────────────────────────
 const cleoStore = useCleoStore();
-const orchStore = useOrchestratorStore();
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const NODE_W = 120;
 const NODE_H = 36;
-const WAVE_SPACING = 160;
-const NODE_SPACING = 56;
-const SVG_PAD_X = 16;
-const SVG_PAD_Y = 16;
-
-const PHASE_NODE_W = 72;
-const PHASE_NODE_H = 44;
-const PHASE_SPACING = 104;
-const PHASE_PAD_X = 16;
-const PHASE_PAD_Y = 16;
+const WAVE_SPACING = 180;
+const NODE_SPACING = 70;
+const SVG_PAD_X = 20;
+const SVG_PAD_Y = 20;
 
 const COLORS = {
   done:    "#00ff66",
@@ -291,39 +175,13 @@ const COLORS = {
   edge:    "#374151",
 } as const;
 
-// ── Mode ─────────────────────────────────────────────────────────────────────
-const mode = ref<"task" | "pipeline">("pipeline");
-
-// ── Run / epic selection ──────────────────────────────────────────────────────
+// ── Epic selection ────────────────────────────────────────────────────────────
+// Prop takes precedence; falls back to store's selected epic (set by EpicTaskTree)
 const epicId = computed<string | null>(() => {
   return props.epicId ?? cleoStore.selectedEpicId ?? null;
 });
 
 const hasEpic = computed<boolean>(() => epicId.value !== null);
-
-const selectedRun = computed<RunSummary | null>(() => {
-  if (props.run) return props.run;
-  const agent = orchStore.selectedAgent ?? orchStore.recentAgents[0] ?? null;
-  if (!agent) return null;
-  const meta = agent.metadata ?? {};
-  return {
-    adw_id: agent.id,
-    repo_url: (meta.repo_url as string) ?? "",
-    issue_number: (meta.issue_number as number) ?? 0,
-    workflow: (agent.adw_step as string) ?? "",
-    model_set: "",
-    status: (meta.run_status as string) ?? agent.status,
-    tokens_used: agent.input_tokens + agent.output_tokens,
-  } as RunSummary;
-});
-
-const hasRun = computed<boolean>(() => selectedRun.value !== null);
-
-// Auto-switch mode based on what's available
-watch([hasEpic, hasRun], ([epic, run]) => {
-  if (epic && mode.value === "pipeline" && !run) mode.value = "task";
-  if (run && mode.value === "task" && !epic) mode.value = "pipeline";
-});
 
 // ── Task graph data ────────────────────────────────────────────────────────────
 interface TaskWithDepends {
@@ -524,13 +382,14 @@ const graphNodes = computed(() => graphLayout.value.nodes);
 const graphEdges = computed(() => graphLayout.value.edges);
 
 const svgWidth = computed(() => {
-  if (graphNodes.value.length === 0) return 200;
+  if (graphNodes.value.length === 0) return 300;
   return Math.max(...graphNodes.value.map((n) => n.x + NODE_W)) + SVG_PAD_X;
 });
 
 const svgHeight = computed(() => {
-  if (graphNodes.value.length === 0) return 100;
-  return Math.max(...graphNodes.value.map((n) => n.y + NODE_H)) + SVG_PAD_Y;
+  if (graphNodes.value.length === 0) return 200;
+  const natural = Math.max(...graphNodes.value.map((n) => n.y + NODE_H)) + SVG_PAD_Y;
+  return Math.max(natural, 200);
 });
 
 // ── Edge rendering ────────────────────────────────────────────────────────────
@@ -610,147 +469,7 @@ function truncate(s: string, len: number): string {
   return s.slice(0, len - 1) + "…";
 }
 
-// ── Pipeline phase flow ───────────────────────────────────────────────────────
-const PITER_PHASES = [
-  { key: "classify_iso", label: "Classify" },
-  { key: "plan_iso",     label: "Plan" },
-  { key: "build_iso",    label: "Build" },
-  { key: "test_iso",     label: "Test" },
-  { key: "review_iso",   label: "Review" },
-  { key: "document_iso", label: "Document" },
-  { key: "ship_iso",     label: "Ship" },
-  { key: "reflect_iso",  label: "Reflect" },
-] as const;
-
-const phaseData = ref<Record<string, string>>({});
-const hoveredPhase = ref<string | null>(null);
-
-function normalisePhaseKey(raw: string): string {
-  if (raw.endsWith("_iso")) return raw;
-  return `${raw}_iso`;
-}
-
-async function fetchPhaseData(adwId: string): Promise<void> {
-  try {
-    const resp = await fetch(`/api/runs/${encodeURIComponent(adwId)}/phases`);
-    if (!resp.ok) return;
-    const data = (await resp.json()) as { phases: Array<{ phase: string; status: string }> };
-    const map: Record<string, string> = {};
-    for (const p of data.phases ?? []) {
-      map[normalisePhaseKey(p.phase)] = p.status;
-    }
-    phaseData.value = map;
-  } catch {
-    // ignore — stale data acceptable
-  }
-}
-
-watch(
-  selectedRun,
-  (run) => {
-    phaseData.value = {};
-    if (run?.adw_id) fetchPhaseData(run.adw_id);
-  },
-  { immediate: true },
-);
-
-// Derive active phase from event stream
-const activePhaseKey = computed<string | null>(() => {
-  if (!selectedRun.value) return null;
-  const runId = selectedRun.value.adw_id;
-  const events = orchStore.eventStreamEntries.filter(
-    (e) => e.agentId === runId && e.metadata?.phase,
-  );
-  if (events.length === 0) return null;
-  return normalisePhaseKey(String(events[events.length - 1].metadata!.phase));
-});
-
-type PhaseStatus = "completed" | "active" | "pending" | "failed";
-
-function phaseStatusFor(key: string): PhaseStatus {
-  const serverStatus = phaseData.value[key];
-  if (serverStatus === "succeeded" || serverStatus === "completed") return "completed";
-  if (serverStatus === "failed" || serverStatus === "aborted") return "failed";
-  if (serverStatus === "running") return "active";
-
-  const active = activePhaseKey.value;
-  if (!active) return "pending";
-  const phaseKeys = PITER_PHASES.map((p) => p.key as string);
-  const activeIdx = phaseKeys.indexOf(active);
-  const thisIdx = phaseKeys.indexOf(key);
-  if (thisIdx < 0) return "pending";
-  if (thisIdx < activeIdx) return "completed";
-  if (thisIdx === activeIdx) return "active";
-  return "pending";
-}
-
-interface PhaseNode {
-  key: string;
-  label: string;
-  status: PhaseStatus;
-  x: number;
-  y: number;
-}
-
-const pipelinePhaseNodes = computed<PhaseNode[]>(() => {
-  return PITER_PHASES.map((phase, i) => ({
-    key: phase.key,
-    label: phase.label,
-    status: phaseStatusFor(phase.key),
-    x: PHASE_PAD_X + i * PHASE_SPACING,
-    y: PHASE_PAD_Y,
-  }));
-});
-
-interface PipelineConnector {
-  x1: number; y1: number;
-  x2: number; y2: number;
-  color: string;
-  marker: string;
-}
-
-const pipelineConnectors = computed<PipelineConnector[]>(() => {
-  const conns: PipelineConnector[] = [];
-  const nodes = pipelinePhaseNodes.value;
-  for (let i = 0; i < nodes.length - 1; i++) {
-    const from = nodes[i];
-    const to = nodes[i + 1];
-    const x1 = from.x + PHASE_NODE_W;
-    const y1 = from.y + PHASE_NODE_H / 2;
-    const x2 = to.x;
-    const y2 = to.y + PHASE_NODE_H / 2;
-    let color = "#374151";
-    let marker = "url(#pipe-arrow)";
-    if (from.status === "completed") { color = COLORS.done; marker = "url(#pipe-arrow-done)"; }
-    else if (from.status === "active") { color = COLORS.active; marker = "url(#pipe-arrow-active)"; }
-    conns.push({ x1, y1, x2, y2, color, marker });
-  }
-  return conns;
-});
-
-const pipelineSvgWidth = computed(() => {
-  return PHASE_PAD_X * 2 + PITER_PHASES.length * PHASE_SPACING;
-});
-
-const pipelineSvgHeight = computed(() => {
-  return PHASE_PAD_Y * 2 + PHASE_NODE_H;
-});
-
-function phaseNodeFill(status: PhaseStatus): string {
-  if (status === "completed") return "rgba(0, 255, 102, 0.08)";
-  if (status === "active")    return "rgba(0, 255, 204, 0.1)";
-  if (status === "failed")    return "rgba(255, 68, 68, 0.08)";
-  return "rgba(30, 34, 41, 0.8)";
-}
-
-function phaseNodeStroke(status: PhaseStatus): string {
-  if (status === "completed") return COLORS.done;
-  if (status === "active")    return COLORS.active;
-  if (status === "failed")    return COLORS.blocked;
-  return "#374151";
-}
-
-// Ref for container (unused beyond SVG responsive scaling)
+// Ref for container
 const svgContainerRef = ref<HTMLElement | null>(null);
 </script>
 
@@ -760,53 +479,37 @@ const svgContainerRef = ref<HTMLElement | null>(null);
   flex-direction: column;
   width: 100%;
   height: 100%;
-  min-height: 0;
+  min-height: 300px;
 }
 
-/* ── Toolbar / mode toggle ──────────────────────────────────────────────────── */
-.dep-graph-toolbar {
+/* ── Header ──────────────────────────────────────────────────────────────────── */
+.dep-graph-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: 8px;
+  padding: 4px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
 }
 
-.dep-mode-btn {
-  background: none;
-  border: none;
-  color: #484f58;
-  cursor: pointer;
+.dep-graph-title {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.1em;
+  color: #484f58;
   font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
-  padding: 2px 6px;
-  border-radius: 3px;
-  transition: color 0.15s, background 0.15s;
+  text-transform: uppercase;
 }
 
-.dep-mode-btn:hover:not(:disabled) {
-  color: #8b949e;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.dep-mode-btn.dep-mode-active {
+.dep-graph-epic-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   color: #00ffcc;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
   background: rgba(0, 255, 204, 0.07);
-}
-
-.dep-mode-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.dep-mode-sep {
-  color: #21262d;
-  font-size: 12px;
-  line-height: 1;
-  user-select: none;
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 /* ── SVG area ────────────────────────────────────────────────────────────────── */
@@ -837,13 +540,14 @@ const svgContainerRef = ref<HTMLElement | null>(null);
   font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
 }
 
-/* ── SVG container (scrollable) ──────────────────────────────────────────────── */
+/* ── SVG container (horizontally scrollable) ──────────────────────────────────── */
 .dep-svg-container {
   flex: 1;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   padding: 8px;
 }
 
@@ -853,8 +557,7 @@ const svgContainerRef = ref<HTMLElement | null>(null);
 
 .dep-svg {
   display: block;
-  max-width: 100%;
-  height: auto;
+  flex-shrink: 0;
 }
 
 /* ── Node hover interaction ─────────────────────────────────────────────────── */

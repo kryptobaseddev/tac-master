@@ -61,10 +61,6 @@
         </template>
       </div>
 
-      <!-- Dependency graph (T054) -->
-      <div class="dep-graph-area">
-        <DependencyGraph :run="selectedRun" />
-      </div>
     </div>
   </div>
 </template>
@@ -84,7 +80,6 @@
 import { computed, ref, watch, onMounted } from "vue";
 import { useOrchestratorStore } from "../stores/orchestratorStore";
 import type { RunSummary } from "../types";
-import DependencyGraph from "./DependencyGraph.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -224,7 +219,7 @@ function onPhaseClick(phaseKey: string): void {
 .pipeline-flow {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex-shrink: 0;
   background: #0d0f1a;
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 6px;
@@ -280,12 +275,10 @@ function onPhaseClick(phaseKey: string): void {
 
 /* ── Body ── */
 .pipeline-body {
-  flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 12px 16px;
-  gap: 12px;
+  padding: 10px 16px;
   overflow: hidden;
 }
 
@@ -440,17 +433,4 @@ function onPhaseClick(phaseKey: string): void {
   background: rgba(255, 255, 255, 0.08);
 }
 
-/* ── Dependency graph area ── */
-.dep-graph-area {
-  flex: 1;
-  border: 1px dashed rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 48px;
-  background: rgba(0, 0, 0, 0.15);
-}
-
-/* DependencyGraph fills the dep-graph-area */
 </style>
