@@ -129,12 +129,12 @@ onMounted(() => {
     <template #main>
       <!-- Dashboard view: panels -->
       <template v-if="activeTab === 'dashboard'">
-        <ActiveAgentsPanel />
         <PipelineFlow @phase-click="openPhaseModal" />
-        <IssueDetails />
+        <ActiveAgentsPanel />
         <div class="dep-graph-panel">
           <DependencyGraph />
         </div>
+        <IssueDetails />
       </template>
 
       <!-- System logs page -->

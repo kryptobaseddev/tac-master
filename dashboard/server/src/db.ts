@@ -8,6 +8,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { existsSync, readdirSync } from "node:fs";
 import type { HookEvent, RepoStatus, RunSummary, FilterOptions } from "./types";
 
 const DASHBOARD_DB = process.env.TAC_DASHBOARD_DB ?? "./dashboard.sqlite";
@@ -295,17 +296,18 @@ export interface PhaseEntry {
 }
 
 /**
- * Returns the phases touched by a run derived from two sources:
- * 1. The dashboard events DB (hook_events with phase+adw_id set)
- * 2. The tac_master runs table to determine terminal status
+ * Returns the phases touched by a run derived from:
+ * 1. Agent output directories under REPOS_BASE/<repo>/<adw_id>/<agent>/
+ *    Each directory corresponds to a Claude sub-agent. We map agent names to
+ *    PITER phases via AGENT_TO_PHASE_MAP.
+ * 2. tac_master.sqlite runs table for the run's terminal status.
  *
- * Phase status inference:
- *  - The last known event for each phase determines "started".
- *  - If the run has ended (succeeded/failed/aborted) AND there are no later
- *    phases, the last seen phase is marked as the run's terminal status.
- *  - A phase is "active" only when it matches the most recent event overall.
- *  - All earlier phases are "completed".
+ * The events DB phase column is always NULL (hooks don't set it), so we rely
+ * on the filesystem directory listing as ground truth for which phases ran.
  */
+
+const REPOS_BASE = process.env.REPOS_BASE ?? "/srv/tac-master/repos";
+
 const PITER_PHASES = [
   "classify_iso",
   "plan_iso",
@@ -317,28 +319,70 @@ const PITER_PHASES = [
   "reflect_iso",
 ];
 
-export function getRunPhases(adwId: string): PhaseEntry[] {
-  // Query dashboard events DB for phases seen for this run
-  type PhaseRow = { phase: string; first_ts: number; last_ts: number };
-  const rows = db()
-    .prepare(
-      `SELECT phase,
-              MIN(timestamp) AS first_ts,
-              MAX(timestamp) AS last_ts
-       FROM events
-       WHERE adw_id = ?
-         AND phase IS NOT NULL
-       GROUP BY phase
-       ORDER BY first_ts ASC`,
-    )
-    .all(adwId) as PhaseRow[];
+/** Map from raw agent directory name (prefix match) → PITER phase key.
+ *  Note: branch_generator, ops are infra agents that run for every pipeline
+ *  invocation (even aborted ones) — they do NOT indicate ship_iso reached.
+ *  pr_creator and kpi_tracker are only created when ship actually runs.
+ */
+const AGENT_TO_PHASE: Array<[string, string]> = [
+  ["issue_classifier",         "classify_iso"],
+  ["classify",                 "classify_iso"],
+  ["sdlc_planner",             "plan_iso"],
+  ["planner",                  "plan_iso"],
+  ["sdlc_implementor",         "build_iso"],
+  ["implementor",              "build_iso"],
+  ["test_runner",              "test_iso"],
+  ["test_resolver",            "test_iso"],
+  ["test_",                    "test_iso"],
+  ["reviewer",                 "review_iso"],
+  ["documenter",               "document_iso"],
+  ["document",                 "document_iso"],
+  ["pr_creator",               "ship_iso"],
+  ["kpi_tracker",              "ship_iso"],
+  ["reflect",                  "reflect_iso"],
+  // branch_generator and ops excluded — they run in every pipeline and would
+  // incorrectly mark ship_iso as seen even when the run never reached ship.
+];
 
-  if (rows.length === 0) {
-    // No events recorded yet — return all phases as pending
-    return PITER_PHASES.map((p) => ({ phase: p, status: "pending" }));
+function agentDirToPiterPhase(agentDir: string): string | null {
+  const d = agentDir.toLowerCase();
+  // First: canonical adw_*_iso directories map directly to PITER phases
+  // e.g. "adw_plan_iso" → "plan_iso"
+  if (d.startsWith("adw_") && d.endsWith("_iso")) {
+    const inner = d.slice(4); // strip "adw_"
+    if (PITER_PHASES.includes(inner)) return inner;
+  }
+  // Second: map individual agent sub-directories via prefix matching
+  for (const [prefix, phase] of AGENT_TO_PHASE) {
+    if (d === prefix || d.startsWith(prefix)) return phase;
+  }
+  return null;
+}
+
+/** Collect all agent dirs for this adw_id across all repo slugs */
+function collectAgentDirs(adwId: string): string[] {
+  let repoSlugs: string[];
+  try {
+    repoSlugs = readdirSync(REPOS_BASE);
+  } catch {
+    return [];
   }
 
-  // Determine run's terminal status from tac_master DB if available
+  for (const slug of repoSlugs) {
+    const agentsDir = `${REPOS_BASE}/${slug}/agents/${adwId}`;
+    try {
+      const entries = readdirSync(agentsDir);
+      // Filter to directories that look like agent names (not adw_state.json)
+      return entries.filter((e) => !e.includes("."));
+    } catch {
+      continue;
+    }
+  }
+  return [];
+}
+
+export function getRunPhases(adwId: string): PhaseEntry[] {
+  // Get run terminal status from tac_master
   let runStatus = "running";
   if (tacDb) {
     try {
@@ -351,46 +395,50 @@ export function getRunPhases(adwId: string): PhaseEntry[] {
     }
   }
 
-  const seenPhases = rows.map((r) => r.phase);
-  const lastSeenPhase = seenPhases[seenPhases.length - 1];
-  const mostRecentTs = rows[rows.length - 1]?.last_ts ?? 0;
+  // Collect agent directories and map to PITER phases
+  const agentDirs = collectAgentDirs(adwId);
 
-  // Build a lookup of normalised phase names from events
-  const phaseMap = new Map<string, PhaseRow>();
-  for (const r of rows) {
-    phaseMap.set(normPhase(r.phase), r);
+  // Build ordered set of PITER phases that have at least one matching dir.
+  // Strategy: always scan all dirs; prefer adw_*_iso dirs for phase detection
+  // (they are canonical), but also include agent-level dirs so we catch
+  // phases like classify_iso that don't have an adw_ wrapper.
+  const seenPiterPhases = new Set<string>();
+  for (const dir of agentDirs) {
+    const phase = agentDirToPiterPhase(dir);
+    if (phase) seenPiterPhases.add(phase);
   }
 
+  if (seenPiterPhases.size === 0) {
+    // No agent output found — all pending
+    return PITER_PHASES.map((p) => ({ phase: p, status: "pending" }));
+  }
+
+  // Ordered list of seen PITER phases (in canonical order)
+  const orderedSeen = PITER_PHASES.filter((p) => seenPiterPhases.has(p));
+  const lastSeenPiter = orderedSeen[orderedSeen.length - 1];
+
   return PITER_PHASES.map((piterKey) => {
-    const row = phaseMap.get(piterKey);
-    if (!row) {
-      // Not yet reached
+    if (!seenPiterPhases.has(piterKey)) {
       return { phase: piterKey, status: "pending" };
     }
 
-    const isLast = normPhase(lastSeenPhase) === piterKey;
+    const isLast = piterKey === lastSeenPiter;
     let status: string;
 
-    if (isLast) {
-      if (runStatus === "succeeded") {
-        status = "completed";
-      } else if (runStatus === "failed" || runStatus === "aborted") {
-        status = "failed";
-      } else {
-        // still running — this is the active phase if its last event is the
-        // most recent overall; otherwise treat as completed
-        status = row.last_ts === mostRecentTs ? "running" : "completed";
-      }
-    } else {
+    if (!isLast) {
       status = "completed";
+    } else if (runStatus === "succeeded") {
+      status = "completed";
+    } else if (runStatus === "failed") {
+      status = "failed";
+    } else if (runStatus === "aborted") {
+      status = "failed";
+    } else {
+      // Still running — this phase is active
+      status = "running";
     }
 
-    return {
-      phase: piterKey,
-      status,
-      started: row.first_ts,
-      ended: isLast && runStatus !== "running" ? row.last_ts : null,
-    };
+    return { phase: piterKey, status };
   });
 }
 
