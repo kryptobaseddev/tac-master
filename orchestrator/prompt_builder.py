@@ -1,8 +1,9 @@
 """Prompt builder for OrchestratorService.
 
-Loads orchestrator_system.md and resolves the three dynamic placeholders:
+Loads orchestrator_system.md and resolves the dynamic placeholders:
 
   {{AVAILABLE_WORKFLOWS}}  — adw_* scripts discovered from adws/ directory
+  {{AVAILABLE_AGENTS}}     — slash-command templates from .claude/commands/
   {{CLEO_CONTEXT}}         — live task/epic summary via `cleo` CLI subprocess
   {{ACTIVE_RUNS}}          — pending/running ADW runs from StateStore
 
@@ -32,6 +33,7 @@ PROMPT_TEMPLATE_PATH = _THIS_DIR / "system_prompts" / "orchestrator_system.md"
 # Relative to tac-master root (two levels up from this file's directory)
 _TAC_MASTER_ROOT = _THIS_DIR.parent
 ADWS_DIR = _TAC_MASTER_ROOT / "adws"
+AGENTS_DIR = _TAC_MASTER_ROOT / ".claude" / "commands"
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +59,31 @@ def _resolve_available_workflows(adws_dir: Path = ADWS_DIR) -> str:
 
     lines = [f"- `{s}`" for s in scripts]
     logger.debug("Resolved %d ADW workflows", len(scripts))
+    return "\n".join(lines)
+
+
+def _resolve_available_agents(agents_dir: Path = AGENTS_DIR) -> str:
+    """Return a markdown bullet list of agent command templates found in *agents_dir*.
+
+    Scans ``*.md`` files directly inside *agents_dir* (not sub-directories) and
+    returns their stems as slash-command names so the orchestrator knows which
+    in-worktree commands are available to a dispatched ADW agent.
+    """
+    if not agents_dir.exists():
+        logger.warning(".claude/commands/ directory not found at %s", agents_dir)
+        return "_No agent command templates found — .claude/commands/ directory is missing._"
+
+    # Only top-level .md files; skip sub-directories like e2e/
+    commands = sorted(
+        p.stem for p in agents_dir.glob("*.md") if p.is_file()
+    )
+
+    if not commands:
+        logger.warning("No *.md command templates found in %s", agents_dir)
+        return "_No agent command templates found in .claude/commands/ directory._"
+
+    lines = [f"- `/{cmd}`" for cmd in commands]
+    logger.debug("Resolved %d agent command templates", len(commands))
     return "\n".join(lines)
 
 
@@ -136,6 +163,7 @@ def build_system_prompt(
     *,
     prompt_path: Path = PROMPT_TEMPLATE_PATH,
     adws_dir: Path = ADWS_DIR,
+    agents_dir: Path = AGENTS_DIR,
 ) -> str:
     """Load the orchestrator system prompt template and inject all placeholders.
 
@@ -148,6 +176,8 @@ def build_system_prompt(
         Override the template path (used in tests).
     adws_dir:
         Override the adws/ directory (used in tests).
+    agents_dir:
+        Override the .claude/commands/ directory (used in tests).
 
     Returns
     -------
@@ -171,6 +201,12 @@ def build_system_prompt(
         template = template.replace(
             "{{AVAILABLE_WORKFLOWS}}",
             _resolve_available_workflows(adws_dir),
+        )
+
+    if "{{AVAILABLE_AGENTS}}" in template:
+        template = template.replace(
+            "{{AVAILABLE_AGENTS}}",
+            _resolve_available_agents(agents_dir),
         )
 
     if "{{CLEO_CONTEXT}}" in template:
